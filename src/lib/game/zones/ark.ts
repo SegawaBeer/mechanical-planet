@@ -84,7 +84,7 @@ function bow(c: Ctx, f: THREE.Matrix4, s: Section): void {
 }
 
 /** Stern: engine block, three nozzles and their glow. */
-function stern(c: Ctx, api: ZoneApi, f: THREE.Matrix4, s: Section): void {
+function stern(c: Ctx, f: THREE.Matrix4, s: Section): void {
   const aft = -s.len / 2 - 0.4;
   part(c.solid, G.box, DARK, f, { p: [0, 0.4, aft - 0.5], s: [s.w * 0.72, 3.2, 1.2] });
   for (const x of [-2.0, 0, 2.0]) {
@@ -96,7 +96,7 @@ function stern(c: Ctx, api: ZoneApi, f: THREE.Matrix4, s: Section): void {
 }
 
 /** The bridge tower: stepped blocks, lit window strips and a signal mast. */
-function bridge(c: Ctx, api: ZoneApi, f: THREE.Matrix4, s: Section): void {
+function bridge(c: Ctx, f: THREE.Matrix4, s: Section): void {
   const deck = s.h + 0.3;
   part(c.solid, G.box, GUN, f, { p: [0, deck, -1.0], s: [5.4, 1.4, 3.6] });
   part(c.solid, G.box, HULL, f, { p: [0, deck + 1.4, -1.2], s: [4.0, 1.0, 2.8] });
@@ -148,7 +148,7 @@ function crane(c: Ctx, api: ZoneApi, east: number, north: number, yaw: number): 
   return { f, tip };
 }
 
-function hook(api: ZoneApi, c: Ctx, f: THREE.Matrix4, tip: THREE.Vector3): void {
+function hook(api: ZoneApi, f: THREE.Matrix4, tip: THREE.Vector3): void {
   const group = new THREE.Group();
   group.position.copy(tip);
   const base = new THREE.Quaternion().setFromRotationMatrix(f);
@@ -168,7 +168,6 @@ function hook(api: ZoneApi, c: Ctx, f: THREE.Matrix4, tip: THREE.Vector3): void 
     swing.setFromAxisAngle(axis, Math.sin(t * 0.85 + 0.7) * 0.14);
     group.quaternion.copy(base).multiply(swing);
   });
-  void c;
 }
 
 /** A small lamp on a pole that blinks red. */
@@ -253,8 +252,8 @@ function buildArk(c: Ctx, api: ZoneApi): void {
 
   for (const { s, f } of frames) hullSection(c, f, s);
   bow(c, frames[frames.length - 1].f, SECTIONS[SECTIONS.length - 1]);
-  stern(c, api, frames[0].f, SECTIONS[0]);
-  bridge(c, api, frames[2].f, SECTIONS[2]);
+  stern(c, frames[0].f, SECTIONS[0]);
+  bridge(c, frames[2].f, SECTIONS[2]);
   ramp(c, api);
 
   // One ground-frame collider per slice: the hull is a wall, not a walkway.
@@ -263,7 +262,7 @@ function buildArk(c: Ctx, api: ZoneApi): void {
 
   const south = crane(c, api, -9.5, 3.4, -0.4);
   const north = crane(c, api, 11.5, 16.2, 2.6);
-  hook(api, c, south.f, south.tip);
+  hook(api, south.f, south.tip);
   const lampPos = new THREE.Vector3(0, 8.7, 0).applyMatrix4(north.f);
   warningLamp(api, north.f, lampPos);
   part(c.solid, G.box, DARK, north.f, { p: [0, 8.2, 0], s: [0.4, 0.5, 0.4] });
@@ -286,8 +285,10 @@ function buildArk(c: Ctx, api: ZoneApi): void {
   emit(c, pylon, LAMP, 0.9, 7, [0, 4.2, 0.55]);
   footprint(c, pylon, 0.9);
 
-  // Keep the scatter off the dock floor.
+  // Keep the scatter off the dock floor, the beacon and the robot's spot.
   api.exclude(0, NORTH, 19);
+  api.exclude(0, 0, 4);
+  api.exclude(4, -4, 2.2);
   api.exclude(-9.5, 3.4, 4);
   api.exclude(11.5, 16.2, 4);
   api.exclude(-6.5, 4.0, 3);

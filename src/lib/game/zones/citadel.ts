@@ -115,14 +115,14 @@ function keepTower(c: Ctx, f: THREE.Matrix4, s: TowerSpec): number {
       part(c.solid, G.box, IRON, f, { p: [e, y + th * 0.5, 0], s: [0.06, th * 0.7, sw * 0.2] });
     }
   }
-  // Buttresses splayed against each face of the base tier.
+  // Buttresses leaning against each face of the base tier.
   for (const [px, pz, rx, rz] of [
-    [0, w * 0.5, 0.32, 0],
-    [0, -w * 0.5, -0.32, 0],
-    [w * 0.5, 0, 0, -0.32],
-    [-w * 0.5, 0, 0, 0.32]
+    [0, w * 0.62, -0.5, 0],
+    [0, -w * 0.62, 0.5, 0],
+    [w * 0.62, 0, 0, 0.5],
+    [-w * 0.62, 0, 0, -0.5]
   ]) {
-    part(c.solid, G.box, STEEL_D, f, { p: [px, 0.4, pz], s: [w * 0.42, usable * 0.38, 0.42], r: [rx, 0, rz] });
+    part(c.solid, G.box, STEEL_D, f, { p: [px, 0.1, pz], s: [w * 0.62, usable * 0.55, 0.34], r: [rx, 0, rz] });
   }
   // Corner spires on the top ledge.
   const cw = w * 0.48;
