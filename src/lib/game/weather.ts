@@ -13,15 +13,8 @@ export type WeatherKind = 'rain' | 'snow' | 'embers' | 'leaves' | null;
 /** Weather for each biome; biomes not listed have clear air. */
 export function weatherFor(biome: BiomeId): WeatherKind {
   switch (biome) {
-    case 'forest':
-    case 'marsh':
-      return 'rain';
-    case 'arctic':
-      return 'snow';
-    case 'ember':
+    case 'fortress':
       return 'embers';
-    case 'grove':
-      return 'leaves';
     default:
       return null;
   }

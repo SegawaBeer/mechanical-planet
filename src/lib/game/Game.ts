@@ -19,7 +19,7 @@ import {
 import { NIGHT } from './night';
 import { LightPool, emitter, type Emitter } from './lights';
 import { BOAT_SEAT, LAUNCH_RANGE, Wake, buildBoat, findLaunchPoint } from './boat';
-import { buildFlame, buildWindmillBlades, buildWorldProps } from './props';
+import { buildWorldProps, type Dynamic } from './props';
 import {
   Character,
   buildAlienCritter,
@@ -37,6 +37,8 @@ import {
 } from './character';
 import { Critter, Hearts } from './critters';
 import { Clouds } from './clouds';
+import { Skyline } from './skyline';
+import { buildRobotDeer } from './wildlife';
 import { Aurora, SkyAurora } from './aurora';
 import { Constellations, Meteors, Moon, Planets, type PlanetTarget } from './sky';
 import { patchSurface, type SurfaceFx } from './surfaceFx';
@@ -272,17 +274,13 @@ export class Game {
   private dragThisFrame = false;
 
   // Scenery that moves.
-  private blades: THREE.Group;
-  private flame: THREE.Group;
-  /** Lighthouse lamp: dark until the blog wonder is found, then eased up. */
-  private lamp: Emitter;
-  private lampLevel = 0;
-  private lampOn = false;
+  private dynamics: Dynamic[] = [];
   private critters: Critter[] = [];
   private hearts = new Hearts();
   /** Seconds left of the explorer's petting pose. */
   private petTime = 0;
   private clouds: Clouds;
+  private skyline: Skyline;
   private aurora: Aurora;
   private skyAurora: SkyAurora;
   private weather = new Weather();
@@ -364,7 +362,7 @@ export class Game {
     this.scene.add(this.ground, this.water, this.stars, this.constellations.group, this.meteors.group);
     this.scene.add(this.moon.group);
 
-    const props = buildWorldProps(seed, this.profile);
+    const props = buildWorldProps(seed);
     if (props.solid) this.scene.add(props.solid);
     if (props.glow) {
       this.scene.add(props.glow);
@@ -379,11 +377,12 @@ export class Game {
     for (let i = 0; i < 10 && isOcean(this.shipDir); i++) offsetDir(this.shipDir, -0.11, 0.18);
     this.ship = buildSpaceship(this.shipProgress.crafted);
     surfaceFrame(this.shipDir, -0.35, _m, 0.08).decompose(this.ship.position, this.ship.quaternion, this.ship.scale);
-    this.ship.visible = this.seed === EARTH_SEED || this.shipProgress.crafted;
+    this.ship.visible = false;
     this.scene.add(this.ship);
     this.planets = new Planets(seed, this.destinations, this.shipDir);
+    this.planets.group.visible = false;
     this.scene.add(this.planets.group);
-    if (this.seed === EARTH_SEED && !this.shipProgress.crafted) {
+    if (false as boolean) {
       this.parts = new ShipParts(
         seed,
         this.colliders,
@@ -399,29 +398,9 @@ export class Game {
     // Snow and rain land on the ground and the props through the same patch.
     this.fx = patchSurface([this.ground.material as THREE.Material, ...(props.solid ? [props.solid.material as THREE.Material] : [])], NIGHT.rim);
 
-    // Windmill rotor.
-    const hubPivot = new THREE.Group();
-    props.windmillHub.decompose(hubPivot.position, hubPivot.quaternion, _v1);
-    this.blades = buildWindmillBlades();
-    hubPivot.add(this.blades);
-    this.blades.visible = this.profile.archetype === 'earth';
-    this.scene.add(hubPivot);
-
-    // Campfire flame. Its light is one of the pooled emitters, registered by
-    // the campfire builder along with the ring of stones.
-    const firePivot = new THREE.Group();
-    props.fire.decompose(firePivot.position, firePivot.quaternion, _v1);
-    this.flame = buildFlame();
-    this.flame.visible = this.profile.archetype === 'earth';
-    this.flame.position.y = 0.15;
-    firePivot.add(this.flame);
-    this.scene.add(firePivot);
-
-    // Lighthouse lamp, dark until the blog wonder is found. It reaches much
-    // further than the other sources, so it earns a slot from well out to sea.
-    this.lamp = this.lights.add(
-      emitter(new THREE.Vector3().setFromMatrixPosition(props.lamp), 0xffe6a3, 0, 30, { on: false })
-    );
+    // Moving scenery the zone modules built.
+    this.dynamics = props.dynamics;
+    for (const d of this.dynamics) this.scene.add(d.object);
 
     // Wonder markers.
     for (const w of WONDERS) {
@@ -483,73 +462,16 @@ export class Game {
       this.critters.push(c);
       this.scene.add(c.group);
     };
-    if (this.profile.archetype === 'earth') {
-      spawn(buildSheep(), 'sheep', 'farm', -2.5, -3.5, 3.5, 1.1, 1);
-      spawn(buildSheep(), 'sheep', 'farm', -1.0, -4.5, 3.5, 1.0, 2);
-      spawn(buildSheep(), 'sheep', 'farm', 1.5, -5.5, 3.0, 1.2, 3);
-      spawn(buildGoat(), 'goat', 'farm', 6, 3, 3.0, 1.3, 4);
-      spawn(buildGoat(), 'goat', 'farm', 4.5, -2.0, 3.0, 1.2, 5);
-      spawn(buildBear(), 'polar bear', 'arctic', -4, 5, 5, 1.3, 6);
-      spawn(buildBear(), 'polar bear', 'arctic', 5, -5, 5, 1.1, 7);
-      spawn(buildPenguin(), 'penguin', 'arctic', -6, -4, 3, 0.9, 8);
-      spawn(buildPenguin(), 'penguin', 'arctic', -5.2, -3.2, 3, 0.8, 9);
-      spawn(buildPenguin(), 'penguin', 'arctic', -6.5, -2.4, 3, 1.0, 10);
-      spawn(buildFox(), 'fox', 'forest', 4, 3, 5, 2.2, 11);
-      spawn(buildFox(), 'fox', 'forest', -5, -3, 5, 2.0, 12);
-      spawn(buildRabbit(), 'rabbit', 'forest', 2, -4, 4, 2.6, 13);
-      spawn(buildRabbit(), 'rabbit', 'forest', -3, 5, 4, 2.4, 14);
-      spawn(buildDeer(), 'deer', 'forest', 7, -2, 6, 1.8, 15);
-      spawn(buildCrab(), 'crab', 'shore', -4, 4, 4, 1.4, 16);
-      spawn(buildCrab(), 'crab', 'shore', 3, 5, 4, 1.5, 17);
-      spawn(buildTurtle(), 'turtle', 'shore', -2, -4, 3, 0.7, 18);
-      spawn(buildDuck(), 'duck', 'marsh', -3, 2, 4, 1.2, 19);
-      spawn(buildDuck(), 'duck', 'marsh', -2.2, 2.8, 4, 1.1, 20);
-      spawn(buildDuck(), 'duck', 'marsh', -3.6, 3.4, 4, 1.3, 21);
-      spawn(buildFrog(), 'frog', 'marsh', 4, -3, 3, 1.6, 22);
-      spawn(buildFrog(), 'frog', 'marsh', 1.5, -5, 3, 1.5, 23);
-      spawn(buildDeer(), 'deer', 'grove', -5, 2, 6, 1.9, 24);
-      spawn(buildDeer(), 'deer', 'grove', 4, -3, 6, 1.7, 25);
-      spawn(buildRabbit(0xa08a72), 'rabbit', 'grove', 2, 4, 4, 2.5, 26);
-      spawn(buildRabbit(0xa08a72), 'rabbit', 'grove', -2.5, -4.5, 4, 2.3, 27);
-      spawn(buildFox(0xe6c48a), 'fennec fox', 'desert', 5, 2, 7, 2.4, 28);
-      spawn(buildFox(0xe6c48a), 'fennec fox', 'desert', -4, -4, 7, 2.2, 29);
-      spawn(buildRabbit(0xd8c3a0), 'jackrabbit', 'desert', 2, -6, 5, 2.8, 30);
-    } else {
-      const names = speciesFor(this.profile.archetype);
-      const homes: readonly [Exclude<BiomeId, 'ocean'>, number, number][] = [
-        ['forest', 4, 3],
-        ['forest', -4, -3],
-        ['farm', 3, -3],
-        ['farm', -4, 2],
-        ['shore', 3, 4],
-        ['ember', -3, -3],
-        ['arctic', 4, 3],
-        ['arctic', -4, -3],
-        ['desert', 4, -2],
-        ['marsh', -3, 3],
-        ['grove', 3, -4],
-        ['grove', -4, 2]
-      ];
-      homes.forEach(([biome, east, north], i) => {
-        spawn(
-          buildAlienCritter(this.profile.terrain[1], this.profile.accent, i),
-          names[i % names.length]!,
-          biome,
-          east,
-          north,
-          4.5,
-          1.35 + (i % 3) * 0.35,
-          i + 40
-        );
-      });
-    }
+    // Wildlife: roams and can be patted, but cannot be controlled.
+    spawn(buildRobotDeer(), 'robot deer', 'river', 6, 3, 6, 1.8, 1);
+    spawn(buildRobotDeer(), 'robot deer', 'river', -5, -4, 6, 1.7, 2);
+    spawn(buildRobotDeer(), 'robot deer', 'citadel', 7, -5, 6, 1.6, 3);
 
-    this.scene.add(this.clouds.group, this.weather.group, this.hearts.group);
-    this.aurora = new Aurora(biomeById('arctic').center, PLANET_RADIUS);
+    this.skyline = new Skyline(seed);
+    this.scene.add(this.clouds.group, this.skyline.group, this.weather.group, this.hearts.group);
+    this.aurora = new Aurora(biomeById('river').center, PLANET_RADIUS);
     this.skyAurora = new SkyAurora(seed);
     this.scene.add(this.aurora.group, this.skyAurora.group);
-    if (this.found.includes('education')) this.aurora.setActive(true);
-    if (this.found.includes('blog')) this.lampOn = true;
 
     // Player starts a few steps from the campfire, facing it.
     this.dir.copy(fire);
@@ -587,6 +509,21 @@ export class Game {
   }
 
   // ---------------------------------------------------------------- public
+
+  /** Dev aid: jump the player to a zone, `east`/`north` surface units from its centre, facing the centre. */
+  debugTeleport(id: BiomeId, east = 0, north = -6): void {
+    const c = biomeById(id).center;
+    this.dir.copy(c);
+    offsetDir(this.dir, east, north);
+    this.colliders.resolve(this.dir, PLAYER_RADIUS);
+    _v1.copy(c).addScaledVector(this.dir, -c.dot(this.dir));
+    if (_v1.lengthSq() < 1e-8) tangentBasis(this.dir, 0, _v2, _v1);
+    this.heading.copy(_v1).normalize();
+    this.camForward.copy(this.heading);
+    this.exitIntro();
+    if (this.globe) this.setGlobe(false);
+    this.placeCharacter();
+  }
 
   setOverlayOpen(open: boolean): void {
     this.overlayOpen = open;
@@ -1112,7 +1049,7 @@ export class Game {
       this.audio.setMood(b.id);
       const weather = weatherFor(b.id);
       this.weather.set(weather);
-      this.weather.setFireflies(b.id === 'forest' || b.id === 'marsh' || b.id === 'grove' || b.id === 'farm');
+      this.weather.setFireflies(b.id === 'river');
       this.audio.setWeather(weather === 'rain' ? 'rain' : weather === 'snow' || weather === 'leaves' ? 'wind' : weather === 'embers' ? 'ember' : null);
     }
     this.launchDir = this.boating || this.globe ? null : findLaunchPoint(this.dir);
@@ -1136,8 +1073,7 @@ export class Game {
 
   /** Water the player could launch into right now: the docked boat if it is close, else open shore. */
   private launchTarget(): THREE.Vector3 | null {
-    if (this.boatPlaced && this.boatDir.angleTo(this.dir) * PLANET_RADIUS < LAUNCH_RANGE + 1.5) return this.boatDir;
-    return this.launchDir;
+    return null;
   }
 
   private launchBoat(): void {
@@ -1324,19 +1260,14 @@ export class Game {
     const t = this.time;
     this.planets.update(dt, t);
 
-    this.blades.rotation.z += dt * 1.1;
-    // Swell and surf on the sea.
+    // Swell on the energy channels.
     (this.water.userData.uniforms as { uTime: { value: number } }).uTime.value = t;
-    this.flame.scale.set(1 + Math.sin(t * 13) * 0.1, 1 + Math.sin(t * 17.3) * 0.18 + Math.sin(t * 5) * 0.06, 1 + Math.cos(t * 11) * 0.1);
-    this.flame.rotation.y = t * 0.8;
-    // The lighthouse eases up rather than snapping on when the wonder is found.
-    this.lampLevel += ((this.lampOn ? 1 : 0) - this.lampLevel) * Math.min(1, dt * 2);
-    this.lamp.on = this.lampLevel > 0.01;
-    this.lamp.intensity = 90 * this.lampLevel;
+    for (const d of this.dynamics) d.update(dt, t);
 
     for (const c of this.critters) c.update(dt, t);
     this.hearts.update(dt, this.camera.quaternion);
     this.clouds.update(dt);
+    this.skyline.update(dt, t);
     this.weather.setHidden(this.globe || this.flying);
     this.weather.update(dt, t, this.dir);
     // Rain darkens the ground it falls on and snow settles on whatever faces the sky.
@@ -1674,7 +1605,7 @@ export class Game {
     if (gem) {
       prompt = {
         id: gem.wonder.id,
-        action: wonderAction(gem.wonder, this.profile.archetype === 'earth'),
+        action: wonderAction(gem.wonder),
         found: this.found.includes(gem.wonder.id)
       };
     }
@@ -1722,8 +1653,6 @@ export class Game {
         this.award('wonders');
       }
     }
-    if (w.id === 'education') this.aurora.setActive(true);
-    if (w.id === 'blog') this.lampOn = true;
     // Face the wonder.
     this.heading.copy(gem.dir).addScaledVector(this.dir, -gem.dir.dot(this.dir));
     if (this.heading.lengthSq() > 1e-6) this.heading.normalize();

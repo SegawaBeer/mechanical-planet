@@ -69,7 +69,7 @@
         {#each WONDERS as w}
           <li class:known={found.includes(w.id)}>
             <span class="mark">{found.includes(w.id) ? '◆' : '◇'}</span>
-            <span class="name">{found.includes(w.id) ? w.title : wonderAction(w, profile.archetype === 'earth')}</span>
+            <span class="name">{found.includes(w.id) ? w.title : wonderAction(w)}</span>
           </li>
         {/each}
       </ul>

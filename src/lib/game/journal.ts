@@ -9,7 +9,7 @@ const JOURNAL_KEY = 'planet_journal';
 const SHARDS_KEY = 'planet_shards';
 
 /** Land biomes plus the sea, in the order the journal lists them. */
-export const JOURNAL_BIOMES: BiomeId[] = ['forest', 'farm', 'shore', 'ember', 'arctic', 'desert', 'marsh', 'grove', 'ocean'];
+export const JOURNAL_BIOMES: BiomeId[] = ['river', 'citadel', 'ark', 'fortress', 'ocean'];
 
 /** Earth keeps its legacy ids; alien regions are scoped to the planet that was explored. */
 export function biomeJournalKey(seed: string, biome: BiomeId): string {

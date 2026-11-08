@@ -31,24 +31,16 @@ type Mood = {
 };
 
 const MOODS: Record<BiomeId, Mood> = {
-  // Fernwood: warm D major, unhurried.
-  forest: { root: 62, scale: [0, 2, 4, 7, 9], chord: [-24, -17, -12, -8, -5], beat: 0.72, density: 0.42, octaves: [0, 2], padTone: 900 },
-  // Clover Fields: bright G major with a lilt.
-  farm: { root: 67, scale: [0, 2, 4, 7, 9], chord: [-24, -20, -17, -12, -8], beat: 0.6, density: 0.5, octaves: [0, 2], padTone: 1100 },
-  // Sunmark Shore: airy A with a major seventh in the pad.
-  shore: { root: 69, scale: [0, 2, 4, 7, 9, 11], chord: [-24, -17, -13, -12, -8], beat: 0.8, density: 0.4, octaves: [0, 2], padTone: 1000 },
-  // Ember Heights: D minor, slow and low.
-  ember: { root: 62, scale: [0, 3, 5, 7, 10], chord: [-24, -17, -12, -9, -5], beat: 1.0, density: 0.32, octaves: [-1, 1], padTone: 600 },
-  // Northlight: suspended F#, sparse and high.
-  arctic: { root: 66, scale: [0, 2, 5, 7, 9], chord: [-24, -19, -12, -7, -5], beat: 0.95, density: 0.3, octaves: [1, 2], padTone: 1300 },
-  // Dune Reach: C with a flattened second, wide and dry.
-  desert: { root: 60, scale: [0, 1, 5, 7, 10], chord: [-24, -17, -12, -11, -5], beat: 1.1, density: 0.26, octaves: [0, 2], padTone: 700 },
-  // Willowmere: A minor ninth, damp and close.
-  marsh: { root: 57, scale: [0, 3, 5, 7, 10], chord: [-24, -17, -12, -10, -5], beat: 0.9, density: 0.34, octaves: [0, 1], padTone: 620 },
-  // Amberfall: B flat major, mellow and round.
-  grove: { root: 58, scale: [0, 2, 4, 7, 9], chord: [-24, -17, -13, -12, -8], beat: 0.78, density: 0.4, octaves: [0, 2], padTone: 850 },
-  // The Shallows: floating E pentatonic.
-  ocean: { root: 64, scale: [0, 2, 4, 7, 9], chord: [-24, -17, -12, -10, -5], beat: 0.85, density: 0.36, octaves: [0, 1], padTone: 800 }
+  // Energy River: open D, flowing.
+  river: { root: 62, scale: [0, 2, 4, 7, 9], chord: [-24, -17, -12, -8, -5], beat: 0.8, density: 0.36, octaves: [0, 2], padTone: 900 },
+  // Iron Citadel: steady G, a little heroic.
+  citadel: { root: 67, scale: [0, 2, 4, 7, 9], chord: [-24, -20, -17, -12, -8], beat: 0.66, density: 0.42, octaves: [0, 2], padTone: 1000 },
+  // Ark Dock: suspended A, wide and slow.
+  ark: { root: 69, scale: [0, 2, 5, 7, 9], chord: [-24, -19, -12, -7, -5], beat: 0.95, density: 0.3, octaves: [0, 1], padTone: 760 },
+  // Shadow Fortress: D minor, low and tense.
+  fortress: { root: 62, scale: [0, 1, 3, 7, 8], chord: [-24, -17, -12, -9, -5], beat: 1.05, density: 0.28, octaves: [-1, 1], padTone: 560 },
+  // Energy channels: floating E.
+  ocean: { root: 64, scale: [0, 2, 4, 7, 9], chord: [-24, -17, -12, -10, -5], beat: 0.85, density: 0.34, octaves: [0, 1], padTone: 820 }
 };
 
 const PAD_LEVEL = 0.05;
@@ -76,7 +68,7 @@ export class Ambience {
   private lastStep = 0;
 
   private mood: Mood | null = null;
-  private pendingMood: BiomeId = 'forest';
+  private pendingMood: BiomeId = 'river';
   private pad: Pad | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private nextSlot = 0;

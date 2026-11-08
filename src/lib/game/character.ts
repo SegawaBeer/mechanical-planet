@@ -357,7 +357,7 @@ export type AnimalData = {
 };
 
 /** Unit primitives, centred on the origin, shared by every animal. */
-const U = {
+export const U = {
   box: new THREE.BoxGeometry(1, 1, 1),
   sphere: new THREE.SphereGeometry(0.5, 8, 6),
   ico: new THREE.IcosahedronGeometry(0.5, 0),
@@ -366,7 +366,7 @@ const U = {
   cyl: new THREE.CylinderGeometry(0.5, 0.5, 1, 8)
 };
 
-type Piece = {
+export type Piece = {
   geo: THREE.BufferGeometry;
   color: number;
   p?: [number, number, number];
@@ -429,7 +429,7 @@ type Leg = { x: number; z: number; w: number; h: number; color: number };
  * pivot. That is three draw calls for an animal instead of nine, which is what
  * lets the planet carry a few dozen of them.
  */
-function animal(gait: Gait, cycle: number, body: Piece[], legs: Leg[] = []): THREE.Group {
+export function animal(gait: Gait, cycle: number, body: Piece[], legs: Leg[] = []): THREE.Group {
   const g = new THREE.Group();
   const pivot = new THREE.Group();
   g.add(pivot);
@@ -456,7 +456,7 @@ function animal(gait: Gait, cycle: number, body: Piece[], legs: Leg[] = []): THR
 }
 
 /** Four legs at the corners of a body. */
-function fourLegs(x: number, z: number, w: number, h: number, color: number) {
+export function fourLegs(x: number, z: number, w: number, h: number, color: number) {
   return [
     { x: -x, z, w, h, color },
     { x, z, w, h, color },

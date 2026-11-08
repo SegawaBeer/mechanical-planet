@@ -13,6 +13,7 @@
   import TouchControls from '$lib/game/ui/TouchControls.svelte';
   import PhotoBar from '$lib/game/ui/PhotoBar.svelte';
   import JournalPanel from '$lib/game/ui/JournalPanel.svelte';
+  import ControlBadge from '$lib/game/ui/ControlBadge.svelte';
 
   let canvas: HTMLCanvasElement;
   let game: Game | null = null;
@@ -293,6 +294,10 @@
           {/if}
         </p>
       </div>
+    {/if}
+
+    {#if $gameState.ready && !$gameState.photo}
+      <ControlBadge />
     {/if}
 
     {#if $gameState.ready && $gameState.photo}
