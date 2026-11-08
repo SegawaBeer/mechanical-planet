@@ -143,10 +143,20 @@ function dress(scene: THREE.Object3D, entry: ModelEntry, form: ModelForm): THREE
     const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
     for (const material of materials) {
       const m = material as THREE.MeshStandardMaterial;
-      // No environment map on this planet, so a metallic surface would render
-      // almost black. hitem3d bakes high metalness, so pull it down.
-      if (typeof m.metalness === 'number' && m.metalness > 0.35) m.metalness = 0.35;
-      if (m.map) m.map.anisotropy = 4;
+      // The planet is a night scene with no environment map, so anything
+      // metallic reflects nothing and reads as a black silhouette. hitem3d
+      // bakes metalness 1, so flatten it and let the albedo carry the look.
+      m.metalness = 0.06;
+      m.roughness = 0.7;
+      if (m.map) {
+        m.map.anisotropy = 4;
+        // A little self-glow from the albedo keeps the colours legible in
+        // shadow, without washing the model out.
+        m.emissiveMap = m.map;
+        m.emissive = new THREE.Color(0xffffff);
+        m.emissiveIntensity = 0.3;
+      }
+      m.needsUpdate = true;
     }
   });
 

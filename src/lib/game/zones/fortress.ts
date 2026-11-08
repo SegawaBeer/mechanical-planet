@@ -5,9 +5,12 @@ import * as THREE from 'three';
 import { G, emit, footprint, part, pick, rnd, type Ctx } from '../kit';
 import type { ZoneApi, ZoneModule } from './types';
 
-const WALL = 0x2f2738;
-const WALL_B = 0x3a3046;
-const WALL_D = 0x251f2d;
+// Deep purple stone, never black, with magenta edges so the silhouette reads
+// against the night.
+const WALL = 0x3d2c4f;
+const WALL_B = 0x4d3a63;
+const WALL_D = 0x31243f;
+const MAGENTA = 0xff3dd0;
 const VIOLET = 0xb04cff;
 const RED = 0xff3355;
 
@@ -26,11 +29,14 @@ function wallPanel(c: Ctx, api: ZoneApi, theta: number, halfArc: number, h: numb
   part(c.solid, G.box, WALL_D, f, { p: [0, h, 0], s: [len, 0.3, 2.0] });
   part(c.solid, G.box, WALL_B, f, { p: [0, h * 0.62, 0.82], s: [len, 0.4, 0.28] });
   part(c.solid, G.box, WALL_B, f, { p: [0, h * 0.26, 0.8], s: [len, 0.4, 0.3] });
-  // Battlement blocks, and a violet slit on the inner face.
+  // Battlement blocks, a bright top edge, and glow slots on both faces.
   for (let k = -1; k <= 1; k++) {
     part(c.solid, G.box, WALL_D, f, { p: [k * len * 0.3, h + 0.3, 0.6], s: [0.9, 0.9, 0.65] });
-    part(c.glow, G.box, VIOLET, f, { p: [k * len * 0.28, h * 0.6, -0.83], s: [0.18, h * 0.42, 0.06] });
+    part(c.glow, G.box, MAGENTA, f, { p: [k * len * 0.28, h * 0.6, -0.83], s: [0.18, h * 0.42, 0.06] });
   }
+  // Magenta line along the parapet, and a low band that lights the walk inside.
+  part(c.glow, G.box, MAGENTA, f, { p: [0, h + 0.02, 0.86], s: [len * 0.98, 0.1, 0.08] });
+  part(c.glow, G.box, MAGENTA, f, { p: [0, h * 0.16, -0.84], s: [len * 0.94, 0.12, 0.07] });
   footprint(c, f, len * 0.56);
 }
 
@@ -42,10 +48,15 @@ function gate(api: ZoneApi, c: Ctx, theta: number): void {
     part(c.solid, G.box, WALL_B, f, { p: [side * 2.6, 3.5, 0], s: [1.3, 0.5, 2.1] });
     part(c.solid, G.cone4, WALL_D, f, { p: [side * 2.6, 4.6, 0], s: [1.2, 1.1, 1.2], r: [0, Math.PI / 4, 0] });
     part(c.glow, G.box, RED, f, { p: [side * 2.05, 2.6, -0.85], s: [0.16, 0.7, 0.06] });
+    // Magenta frame down the inner edge of each post.
+    part(c.glow, G.box, MAGENTA, f, { p: [side * 2.05, 0.15, -0.85], s: [0.13, 4.1, 0.06] });
+    part(c.glow, G.box, MAGENTA, f, { p: [side * 2.05, 0.15, 0.98], s: [0.13, 4.1, 0.06] });
     footprint(c, f, 0.9, [side * 2.6, 0]);
   }
   part(c.solid, G.box, WALL_D, f, { p: [0, 4.0, 0], s: [4.2, 0.7, 1.9] });
-  part(c.glow, G.box, VIOLET, f, { p: [0, 3.95, -0.85], s: [3.4, 0.16, 0.06] });
+  part(c.glow, G.box, MAGENTA, f, { p: [0, 3.95, -0.85], s: [3.6, 0.16, 0.06] });
+  part(c.glow, G.box, MAGENTA, f, { p: [0, 4.72, 0.98], s: [3.6, 0.16, 0.06] });
+  emit(c, f, MAGENTA, 1.0, 11, [0, 3.4, -0.6]);
 }
 
 // ---------------------------------------------------------------- towers
@@ -68,8 +79,10 @@ function tower(c: Ctx, api: ZoneApi, theta: number): THREE.Matrix4 {
     const a = (k * Math.PI) / 2;
     part(c.solid, G.cone4, WALL_D, f, { p: [Math.sin(a) * 1.5, 5.9, Math.cos(a) * 1.5], s: [0.5, 1.6, 0.5], r: [0, Math.PI / 4, 0] });
   }
-  part(c.glow, G.box, VIOLET, f, { p: [0, 3.2, 0], s: [2.4, 0.14, 2.4], r: [0, Math.PI / 4, 0] });
-  emit(c, f, VIOLET, 0.9, 9, [0, 5.9, 0]);
+  part(c.glow, G.box, MAGENTA, f, { p: [0, 3.2, 0], s: [2.4, 0.14, 2.4], r: [0, Math.PI / 4, 0] });
+  part(c.glow, G.box, MAGENTA, f, { p: [0, 4.92, 0], s: [3.3, 0.12, 3.3], r: [0, Math.PI / 4, 0] });
+  part(c.glow, G.box, VIOLET, f, { p: [0, 5.42, 0], s: [2.5, 0.1, 2.5] });
+  emit(c, f, MAGENTA, 1.1, 10, [0, 5.4, 0]);
   footprint(c, f, 2.5);
   return f;
 }
@@ -94,7 +107,7 @@ function turret(api: ZoneApi, f: THREE.Matrix4, phase: number): void {
     barrel.position.set(x, 1.05, 1.5);
     group.add(barrel);
   }
-  const eye = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.16, 0.1), new THREE.MeshBasicMaterial({ color: RED, toneMapped: false }));
+  const eye = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.16, 0.1), new THREE.MeshBasicMaterial({ color: MAGENTA, toneMapped: false }));
   eye.position.set(0, 1.15, 0.83);
   group.add(eye);
 
@@ -111,7 +124,7 @@ function spire(c: Ctx, api: ZoneApi): void {
   part(c.solid, G.cyl8, WALL_D, f, { p: [0, -0.3, 0], s: [6.2, 0.7, 6.2] });
   part(c.solid, G.cyl8, WALL_B, f, { p: [0, 0.4, 0], s: [4.6, 0.4, 4.6] });
   part(c.solid, G.box, WALL_B, f, { p: [0, 0.8, -2.9], s: [2.4, 0.9, 0.5] });
-  part(c.glow, G.box, VIOLET, f, { p: [0, 1.2, -2.66], s: [2.0, 0.14, 0.1] });
+  part(c.glow, G.box, MAGENTA, f, { p: [0, 1.2, -2.66], s: [2.0, 0.14, 0.1] });
 
   // Stacked, twisted slabs: a jagged needle rather than a smooth obelisk.
   let y = 0.8;
@@ -121,8 +134,9 @@ function spire(c: Ctx, api: ZoneApi): void {
     part(c.solid, G.box, i % 2 ? WALL : WALL_D, f, { p: [0, y, 0], s: [s, h, s], r: [0, i * 0.22, 0] });
     part(c.solid, G.box, WALL_B, f, { p: [0, y + h * 0.55, 0], s: [s * 1.06, 0.22, s * 1.06], r: [0, i * 0.22, 0] });
     if (i < 4) {
-      part(c.glow, G.box, VIOLET, f, { p: [0, y + h * 0.3, s * 0.53], s: [s * 0.5, 0.16, 0.08], r: [0, i * 0.22, 0] });
-      part(c.glow, G.box, VIOLET, f, { p: [0, y + h * 0.3, -s * 0.53], s: [s * 0.5, 0.16, 0.08], r: [0, i * 0.22, 0] });
+      const tint = i % 2 ? VIOLET : MAGENTA;
+      part(c.glow, G.box, tint, f, { p: [0, y + h * 0.3, s * 0.53], s: [s * 0.5, 0.16, 0.08], r: [0, i * 0.22, 0] });
+      part(c.glow, G.box, tint, f, { p: [0, y + h * 0.3, -s * 0.53], s: [s * 0.5, 0.16, 0.08], r: [0, i * 0.22, 0] });
     }
     y += h;
     s *= 0.76;
@@ -267,8 +281,8 @@ function buildFortress(c: Ctx, api: ZoneApi): void {
     const f = api.at(e, n, yaw, -0.3);
     part(c.solid, G.box, WALL_D, f, { p: [0, 0, 0], s: [0.7, 0.4, 0.7] });
     part(c.solid, G.box, WALL_B, f, { p: [0, 0.4, 0], s: [0.3, 2.6, 0.3] });
-    part(c.glow, G.sphere, VIOLET, f, { p: [0, 3.1, 0], s: 0.45 });
-    emit(c, f, VIOLET, 1.0, 9, [0, 3.2, 0]);
+    part(c.glow, G.sphere, MAGENTA, f, { p: [0, 3.1, 0], s: 0.45 });
+    emit(c, f, MAGENTA, 1.3, 11, [0, 3.2, 0]);
     footprint(c, f, 0.7);
   }
 
