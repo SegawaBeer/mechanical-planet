@@ -50,6 +50,7 @@ import { Fireworks } from './fireworks';
 import { Protagonist, type Form } from './robots/protagonist';
 import { TransformBurst } from './robots/burst';
 import type { SchemeId } from './robots/scheme';
+import { equip } from './models';
 import { controlState } from './ui/control';
 import {
   JOURNAL_BIOMES,
@@ -517,6 +518,17 @@ export class Game {
     this.scene.add(this.burst.group);
     this.placePlayer();
     this.publishControl();
+
+    // Real GLB models stream in behind the code-built machines. A role without
+    // a model, or a file that fails, keeps its built-in form.
+    for (const crew of this.crews) {
+      void equip(crew.rig, crew.id)
+        .then(() => {
+          if (this.disposed) return;
+          if (crew.rig === this.player) this.placePlayer();
+        })
+        .catch(() => {});
+    }
 
     // Globe view first: the camera hangs above the player's hemisphere.
     this.globePitch = Math.asin(THREE.MathUtils.clamp(this.dir.y, -0.9, 0.9)) + 0.25;
@@ -1185,30 +1197,6 @@ export class Game {
     this.raycaster.setFromCamera(this.ndc, this.camera);
     const hit = this.raycaster.intersectObjects(candidates.map((c) => c.rig.hit), false).length > 0;
     this.canvas.style.cursor = hit ? 'pointer' : '';
-  }
-
-  /**
-   * Swap in external models as they resolve. `load` is called once per machine
-   * id and form; a null result or a rejection keeps that built-in form.
-   */
-  async loadModels(load: (id: SchemeId, form: Form) => Promise<THREE.Object3D | null>): Promise<void> {
-    await Promise.all(
-      this.crews.map(async ({ rig, id }) => {
-        for (const form of ['robot', 'vehicle'] as const) {
-          let model: THREE.Object3D | null = null;
-          try {
-            model = await load(id, form);
-          } catch {
-            model = null;
-          }
-          if (!model || this.disposed) continue;
-          model.traverse((o) => {
-            if (o instanceof THREE.Mesh) o.castShadow = true;
-          });
-          rig.setFormObject(form, model);
-        }
-      })
-    );
   }
 
   // ---------------------------------------------------------------- camera
