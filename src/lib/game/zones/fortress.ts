@@ -37,7 +37,11 @@ function wallPanel(c: Ctx, api: ZoneApi, theta: number, halfArc: number, h: numb
   // Magenta line along the parapet, and a low band that lights the walk inside.
   part(c.glow, G.box, MAGENTA, f, { p: [0, h + 0.02, 0.86], s: [len * 0.98, 0.1, 0.08] });
   part(c.glow, G.box, MAGENTA, f, { p: [0, h * 0.16, -0.84], s: [len * 0.94, 0.12, 0.07] });
-  footprint(c, f, len * 0.56);
+  // A chain of small discs along the panel, so the wall is blocked right up to
+  // its two corners instead of being one fat blob at the middle.
+  const discs = Math.max(3, Math.round(len / 1.1));
+  const step = (len - 1.0) / (discs - 1);
+  for (let i = 0; i < discs; i++) footprint(c, f, 1.0, [-len / 2 + 0.5 + i * step, 0]);
 }
 
 function gate(api: ZoneApi, c: Ctx, theta: number): void {
@@ -51,7 +55,7 @@ function gate(api: ZoneApi, c: Ctx, theta: number): void {
     // Magenta frame down the inner edge of each post.
     part(c.glow, G.box, MAGENTA, f, { p: [side * 2.05, 0.15, -0.85], s: [0.13, 4.1, 0.06] });
     part(c.glow, G.box, MAGENTA, f, { p: [side * 2.05, 0.15, 0.98], s: [0.13, 4.1, 0.06] });
-    footprint(c, f, 0.9, [side * 2.6, 0]);
+    footprint(c, f, 0.7, [side * 2.6, 0]);
   }
   part(c.solid, G.box, WALL_D, f, { p: [0, 4.0, 0], s: [4.2, 0.7, 1.9] });
   part(c.glow, G.box, MAGENTA, f, { p: [0, 3.95, -0.85], s: [3.6, 0.16, 0.06] });

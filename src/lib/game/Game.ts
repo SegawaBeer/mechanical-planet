@@ -7,6 +7,7 @@ import { hashSeed } from './seed';
 import {
   PLANET_RADIUS,
   SEA_LEVEL,
+  surfaceNormal,
   buildGround,
   buildStars,
   buildWater,
@@ -16,7 +17,8 @@ import {
   offsetDir,
   surfaceFrame
 } from './planet';
-import { NIGHT } from './night';
+import { GLOBE_ATMOSPHERE, NIGHT, ZONE_ATMOSPHERE, type Atmosphere, type ZoneAtmosphereId } from './night';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { LightPool, emitter, type Emitter } from './lights';
 import { buildWorldProps, type Dynamic } from './props';
 import {
@@ -146,6 +148,8 @@ const PLAYER_RADIUS = 0.38;
 const VEHICLE_RADIUS = 0.55;
 /** Length of the transform effect, in seconds; the model swaps halfway. */
 const TRANSFORM_TIME = 1;
+/** Nose-to-tail length of the vehicle form, for sampling the ground under it. */
+const VEHICLE_LENGTH = 2.2;
 /** Journal stats are written to storage this often, in seconds, not every step. */
 const JOURNAL_FLUSH = 4;
 const CAM_MIN = 5;
@@ -169,6 +173,10 @@ const _v4 = new THREE.Vector3();
 const _lx = new THREE.Vector3();
 const _ly = new THREE.Vector3();
 const _m = new THREE.Matrix4();
+const _up = new THREE.Vector3();
+const _walkFwd = new THREE.Vector3();
+const _walkRight = new THREE.Vector3();
+const _sample = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _size = new THREE.Vector2();
 
@@ -217,6 +225,23 @@ export class Game {
 
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
+  /** Eased lighting; `atmoTarget` is where it is heading. */
+  private atmoNow = {
+    sky: new THREE.Color(),
+    fog: new THREE.Color(),
+    fogDensity: 0,
+    hemiSky: new THREE.Color(),
+    hemiGround: new THREE.Color(),
+    hemiIntensity: 0,
+    key: new THREE.Color(),
+    keyIntensity: 0,
+    keyHeight: 0.42,
+    exposure: 1,
+    stars: 1
+  };
+  private atmoTarget: Atmosphere = ZONE_ATMOSPHERE.river;
+  private zoneAtmo: ZoneAtmosphereId = 'river';
+  private fog: THREE.FogExp2;
   private camera: THREE.PerspectiveCamera;
   /** Key light. Pale moonlight, kept camera-relative; see `updateCamera`. */
   private moonLight: THREE.DirectionalLight;
@@ -246,6 +271,9 @@ export class Game {
   private readonly ndc = new THREE.Vector2();
   /** Shared state object for machines standing idle. */
   private idleState = { speed: 0, speed01: 0, airborne: false, steer: 0, time: 0 };
+  /** Smoothed up axis of whatever is being driven; see `placeRig`. */
+  private rigUp = new THREE.Vector3(0, 1, 0);
+  private rigUpReady = false;
   private burst = new TransformBurst();
   private hopH = 0;
   private hopV = 0;
@@ -360,6 +388,17 @@ export class Game {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.15;
     this.scene.background = new THREE.Color(this.profile.sky);
+
+    // No environment map means every metal surface has nothing to reflect and
+    // renders black. A neutral studio room, prefiltered once, gives the paint
+    // and chrome something to pick up without washing the world out.
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    this.scene.environmentIntensity = 0.5;
+    pmrem.dispose();
+
+    this.fog = new THREE.FogExp2(0x9fd8ea, 0);
+    this.scene.fog = this.fog;
 
     this.camera = new THREE.PerspectiveCamera(42, 1, 0.1, 1400);
 
@@ -516,6 +555,7 @@ export class Game {
       this.scene.add(crew.rig.root);
     }
     this.scene.add(this.burst.group);
+    this.rigUpReady = false;
     this.placePlayer();
     this.publishControl();
 
@@ -541,7 +581,7 @@ export class Game {
     this.input.onFirstGesture(() => this.exitIntro());
     window.addEventListener('pagehide', this.handlePageHide);
     this.callbacks.onSpace(this.spaceStatus);
-    this.applyLighting();
+    this.applyAtmosphere(0, true);
 
     this.resize();
     this.last = performance.now();
@@ -767,6 +807,7 @@ export class Game {
       this.globeYaw = Math.atan2(d.x, d.z);
     }
     this.setShadowBounds(on ? PLANET_RADIUS + 14 : 30);
+    this.updateAtmosphereTarget();
     this.canvas.style.cursor = '';
     this.callbacks.onGlobe(on);
   }
@@ -957,7 +998,7 @@ export class Game {
     });
     // One footstep per foot landing, so the sound lands with the boot.
     if (this.player.footStrike && !this.airborne) this.audio.step(speed01 > 0.75);
-    this.placePlayer();
+    this.placePlayer(dt);
     this.updateBiome(dt);
     if (Math.abs(this.moveSpeed) > 0.2) {
       this.pickUpShard();
@@ -1115,6 +1156,7 @@ export class Game {
         if (JOURNAL_BIOMES.every((id) => this.journal.biomes.includes(biomeJournalKey(this.seed, id)))) this.award('cartographer');
         this.flushJournal(true);
       }
+      this.setZoneAtmosphere(b.id);
       this.audio.setMood(b.id);
       const weather = weatherFor(b.id);
       this.weather.set(weather);
@@ -1124,16 +1166,53 @@ export class Game {
   }
 
   /** Stand the driven machine on the surface at `dir`, facing `heading`. */
-  private placePlayer(): void {
-    this.placeRig(this.player.root, this.dir, this.heading, this.hopH);
+  private placePlayer(dt = 0): void {
+    const ease = dt > 0 ? 1 - Math.exp(-dt * 9) : 1;
+    const length = this.player.form === 'vehicle' ? VEHICLE_LENGTH : 0;
+    this.placeRig(this.player.root, this.dir, this.heading, this.hopH, ease, length);
   }
 
-  /** Stand any machine on the surface, with its own up and forward. */
-  private placeRig(root: THREE.Object3D, dir: THREE.Vector3, heading: THREE.Vector3, lift = 0): void {
-    root.position.copy(dir).multiplyScalar(walkRadius(dir) + lift);
-    _v2.crossVectors(dir, heading).normalize();
-    _m.makeBasis(_v2, dir, heading);
+  /**
+   * Stand a machine on the surface facing `heading`. Its up is the terrain
+   * normal blended with the radial direction: riding the normal alone makes it
+   * pitch with every rock, riding the radial alone leaves it standing upright
+   * while its nose buries itself in a slope. `upEase` below 1 smooths that tilt
+   * from frame to frame. `bodyLength` samples the ground under the nose and
+   * tail as well, so a long vehicle cannot sink either end into a rise.
+   */
+  private placeRig(
+    root: THREE.Object3D,
+    dir: THREE.Vector3,
+    heading: THREE.Vector3,
+    lift = 0,
+    upEase = 1,
+    bodyLength = 0
+  ): void {
+    surfaceNormal(dir, _up).multiplyScalar(0.6).addScaledVector(dir, 0.4).normalize();
+    if (upEase >= 1 || !this.rigUpReady) {
+      this.rigUp.copy(_up);
+      this.rigUpReady = true;
+    } else {
+      this.rigUp.lerp(_up, upEase).normalize();
+    }
+
+    _walkFwd.copy(heading).addScaledVector(this.rigUp, -heading.dot(this.rigUp));
+    if (_walkFwd.lengthSq() < 1e-8) _walkFwd.copy(heading);
+    _walkFwd.normalize();
+    _walkRight.crossVectors(this.rigUp, _walkFwd).normalize();
+    _m.makeBasis(_walkRight, this.rigUp, _walkFwd);
     root.quaternion.setFromRotationMatrix(_m);
+
+    let radius = walkRadius(dir);
+    const half = bodyLength * 0.5;
+    if (half > 0) {
+      const ang = half / PLANET_RADIUS;
+      _sample.copy(dir).multiplyScalar(Math.cos(ang)).addScaledVector(_walkFwd, Math.sin(ang)).normalize();
+      radius = Math.max(radius, walkRadius(_sample));
+      _sample.copy(dir).multiplyScalar(Math.cos(ang)).addScaledVector(_walkFwd, -Math.sin(ang)).normalize();
+      radius = Math.max(radius, walkRadius(_sample));
+    }
+    root.position.copy(dir).multiplyScalar(radius + lift);
   }
 
   // ---------------------------------------------------------------- take-over
@@ -1168,6 +1247,7 @@ export class Game {
     if (this.globe) this.setGlobe(false);
     this.audio.start();
     this.audio.hop();
+    this.rigUpReady = false;
     this.placePlayer();
     this.publishControl();
     this.updatePickCursor();
@@ -1264,7 +1344,7 @@ export class Game {
     const right = _v1.setFromMatrixColumn(this.camera.matrixWorld, 0);
     const camUp = _v2.setFromMatrixColumn(this.camera.matrixWorld, 1);
     const back = _v3.setFromMatrixColumn(this.camera.matrixWorld, 2);
-    const lift = 0.3 + NIGHT.moonHeight * 0.65;
+    const lift = 0.3 + this.atmoNow.keyHeight * 0.65;
     const moonDir = right.multiplyScalar(-1.15).addScaledVector(camUp, lift).addScaledVector(back, 0.6).normalize();
     const focus = this.flying ? _v4.copy(this.ship.position) : this.globe ? _v4.set(0, 0, 0) : _v4.copy(this.player.root.position);
     this.snapShadowFocus(focus, moonDir);
@@ -1278,6 +1358,7 @@ export class Game {
 
   private updateWorld(dt: number): void {
     const t = this.time;
+    this.applyAtmosphere(dt);
     this.planets.update(dt, t);
 
     // Swell on the energy channels.
@@ -1336,17 +1417,57 @@ export class Game {
     this.lights.update(t, this.flying ? this.ship.position : this.player.root.position);
   }
 
+  // ---------------------------------------------------------------- atmosphere
+
+  /** Follow whichever zone the driven machine is standing in. */
+  private setZoneAtmosphere(zone: ZoneAtmosphereId): void {
+    this.zoneAtmo = zone;
+    this.updateAtmosphereTarget();
+  }
+
+  /** Globe view takes over the lighting entirely while it is open. */
+  private updateAtmosphereTarget(): void {
+    this.atmoTarget = this.globe ? GLOBE_ATMOSPHERE : ZONE_ATMOSPHERE[this.zoneAtmo];
+  }
+
   /**
-   * Settle the world into its one lighting mood. There is no clock to sample,
-   * so this runs once, at build time.
+   * Ease the lighting toward its target and apply it. A zone border takes
+   * about a second and a half to settle; `instant` snaps it, for build time.
    */
-  private applyLighting(): void {
-    // `buildWater` already applies the current planet profile.
-    (this.stars.material as THREE.PointsMaterial).opacity = 1;
-    this.constellations.setOpacity(1);
-    this.meteors.setOpacity(1);
+  private applyAtmosphere(dt: number, instant = false): void {
+    const now = this.atmoNow;
+    const to = this.atmoTarget;
+    const k = instant ? 1 : 1 - Math.exp(-dt * 3);
+    now.sky.lerp(to.sky, k);
+    now.fog.lerp(to.fog, k);
+    now.fogDensity += (to.fogDensity - now.fogDensity) * k;
+    now.hemiSky.lerp(to.hemiSky, k);
+    now.hemiGround.lerp(to.hemiGround, k);
+    now.hemiIntensity += (to.hemiIntensity - now.hemiIntensity) * k;
+    now.key.lerp(to.key, k);
+    now.keyIntensity += (to.keyIntensity - now.keyIntensity) * k;
+    now.keyHeight += (to.keyHeight - now.keyHeight) * k;
+    now.exposure += (to.exposure - now.exposure) * k;
+    now.stars += (to.stars - now.stars) * k;
+
+    (this.scene.background as THREE.Color).copy(now.sky);
+    this.fog.color.copy(now.fog);
+    this.fog.density = now.fogDensity;
+    this.scene.fog = now.fogDensity > 0.0004 ? this.fog : null;
+    this.hemi.color.copy(now.hemiSky);
+    this.hemi.groundColor.copy(now.hemiGround);
+    this.hemi.intensity = now.hemiIntensity;
+    this.moonLight.color.copy(now.key);
+    this.moonLight.intensity = now.keyIntensity;
+    this.renderer.toneMappingExposure = now.exposure;
+
+    // Stars only make sense against a dark sky; the bright zones fade them out.
+    (this.stars.material as THREE.PointsMaterial).opacity = now.stars;
+    this.constellations.setOpacity(now.stars);
+    this.meteors.setOpacity(now.stars);
+
     // Lava, embers, and crystals burn brighter against a dark sky.
-    if (this.glowMat) this.glowMat.color.setScalar(1.4);
+    if (this.glowMat) this.glowMat.color.setScalar(1.1 + 0.5 * (1 - now.stars));
   }
 
   // ---------------------------------------------------------------- journal

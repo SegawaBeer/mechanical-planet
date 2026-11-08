@@ -158,7 +158,7 @@ function crane(c: Ctx, api: ZoneApi, east: number, north: number, yaw: number): 
   part(c.solid, G.box, ORANGE, f, { p: [0, 8.1, 2.4], s: [0.7, 0.7, 6.6] });
   part(c.solid, G.box, MINT, f, { p: [0, 8.9, 1.2], s: [0.16, 1.2, 0.16], r: [0.55, 0, 0] });
   part(c.solid, G.box, INK, f, { p: [0, 7.3, 0], s: [0.9, 0.9, 0.9], r: [0.6, 0, 0] });
-  footprint(c, f, 1.7);
+  footprint(c, f, 1.9);
   const tip = new THREE.Vector3(0, 7.7, 5.4).applyMatrix4(f);
   return { f, tip };
 }
@@ -208,7 +208,10 @@ function pipeCluster(c: Ctx, api: ZoneApi, east: number, north: number, yaw: num
     part(c.solid, G.cyl8, COBALT, f, { p: [x, r + 0.1, 0.4], s: [r * 1.3, 0.35, r * 1.3], r: [Math.PI / 2 - 0.16, 0, 0] });
   }
   part(c.solid, G.box, INK, f, { p: [0, 0.2, -2.6], s: [count * 1.05, 0.5, 1.1] });
-  footprint(c, f, 0.35 * count + 0.4);
+  // The pipes lie along the ground for about seven units, so one disc at the
+  // base would let the player walk through them.
+  const half = 0.48 * (count - 1) + 0.7;
+  for (let z = -2.8; z <= 3.7; z += 1.6) footprint(c, f, half, [0, z]);
 }
 
 function container(c: Ctx, f: THREE.Matrix4, color: number, w = 2.6, h = 1.3): void {
@@ -271,9 +274,12 @@ function buildArk(c: Ctx, api: ZoneApi): void {
   bridge(c, frames[2].f, SECTIONS[2]);
   ramp(c, api);
 
-  // One ground-frame collider per slice: the hull is a wall, not a walkway.
+  // One ground-frame collider per slice, sized to that slice's beam, plus caps
+  // over the bow and the engine nozzles, which reach past the end slices.
   const hullGround = api.at(0, NORTH, YAW);
-  for (const s of SECTIONS) footprint(c, hullGround, 5.2, [0, s.e]);
+  for (const s of SECTIONS) footprint(c, hullGround, s.w / 2 + 0.4, [0, s.e]);
+  const caps: [number, number][] = [[13.7, 3.3], [15.8, 2.5], [17.3, 1.7], [-16.2, 3.1], [-18.4, 2.4], [-20.0, 1.6]];
+  for (const [e, r] of caps) footprint(c, hullGround, r, [0, e]);
 
   const south = crane(c, api, -9.5, 3.4, -0.4);
   const north = crane(c, api, 11.5, 16.2, 2.6);

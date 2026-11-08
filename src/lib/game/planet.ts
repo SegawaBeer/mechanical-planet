@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { biomeAt, configureBiomeOcean, isOcean, landBiomeBlend, oceanField, OCEAN, type Biome } from './biomes';
-import { deriveSeed, fbm3, hash3, seededRng } from './noise';
+import { deriveSeed, fbm3, seededRng } from './noise';
 import type { PlanetProfile } from './space';
 
 export const PLANET_RADIUS = 42;
@@ -41,10 +41,10 @@ export function surfaceRadius(d: THREE.Vector3): number {
     const depth = Math.min(1, -f * 14);
     return PLANET_RADIUS - 0.35 - depth * 1.3;
   }
-  // Canyon walls: a short steep rise out of the channel, then the plates.
+  // Canyon walls: a short steep rise out of the channel, then the open ground.
   const rise = Math.min(1, f * 9);
   const swell = fbm3(d.x * 1.9 - 7, d.y * 1.9 + 4, d.z * 1.9 + 9, 3) * 1.4 * reliefScale;
-  const roll = fbm3(d.x * 6 + 3, d.y * 6, d.z * 6 - 1, 3) * 0.35 * detailScale;
+  const roll = fbm3(d.x * 6 + 3, d.y * 6, d.z * 6 - 1, 3) * 0.18 * detailScale;
   const base = 0.6 + swell + roll;
   // Zone shapes cross-fade near a border so no cliff runs along it.
   const blend = landBiomeBlend(d);
@@ -58,13 +58,13 @@ export function surfaceRadius(d: THREE.Vector3): number {
 function zoneHeight(zone: Biome, h: number, d: THREE.Vector3): number {
   const near = THREE.MathUtils.smoothstep(Math.acos(THREE.MathUtils.clamp(zone.center.dot(d), -1, 1)), 0.55, 0.2);
   if (zone.id === 'river') {
-    // Ridged mesas between the channels: the canyon country.
+    // Rounded mesas between the channels: the canyon country, kept gentle.
     const crease = 1 - Math.abs(fbm3(d.x * terrainCreaseFrequency - 12, d.y * terrainCreaseFrequency + 6, d.z * terrainCreaseFrequency - 2, 3));
-    return h + crease * crease * 1.6 * terrainRuggedScale;
+    return h + crease * crease * 0.8 * terrainRuggedScale;
   }
-  if (zone.id === 'citadel') return Math.round((h + 0.4 * near) / 0.45) * 0.45;
+  if (zone.id === 'citadel') return h + 0.5 * near;
   if (zone.id === 'ark') return THREE.MathUtils.lerp(h, 0.55, near * 0.85);
-  return Math.round((h + 1.1 * near) / 0.7) * 0.7;
+  return h + 1.1 * near;
 }
 
 const _na = new THREE.Vector3();
@@ -86,9 +86,27 @@ export function surfaceNormal(d: THREE.Vector3, out = new THREE.Vector3()): THRE
   return out.copy(d).addScaledVector(_nr, -east).addScaledVector(_nf, -north).normalize();
 }
 
-/** Radius a walker stands at: ground on land, the water surface at sea. */
+/**
+ * Radius a walker stands at: ground on land, the water surface at sea.
+ *
+ * The highest ground within half a unit is used, not just the ground under the
+ * exact spot: the mesh only samples its vertices, so on a slope the surface the
+ * player sees is the top of the faces around them. Standing on the highest of
+ * five samples keeps the feet on that surface instead of sunk into it.
+ */
+const FOOT_SAMPLES = 0.5;
+const _foot = new THREE.Vector3();
 export function walkRadius(d: THREE.Vector3): number {
-  return Math.max(surfaceRadius(d), SEA_LEVEL - 0.15);
+  let r = surfaceRadius(d);
+  for (let i = 0; i < 4; i++) {
+    const east = i === 0 ? FOOT_SAMPLES : i === 1 ? -FOOT_SAMPLES : 0;
+    const north = i === 2 ? FOOT_SAMPLES : i === 3 ? -FOOT_SAMPLES : 0;
+    _foot.copy(d);
+    offsetDir(_foot, east, north);
+    const s = surfaceRadius(_foot);
+    if (s > r) r = s;
+  }
+  return Math.max(r + 0.03, SEA_LEVEL - 0.15);
 }
 
 export function surfacePoint(d: THREE.Vector3, out = new THREE.Vector3()): THREE.Vector3 {
@@ -147,117 +165,175 @@ export function offsetDir(d: THREE.Vector3, east: number, north: number): THREE.
   return d;
 }
 
-/** Plate cell of a direction: faces in one cell share a plate colour. */
-function plateHash(d: THREE.Vector3, size: number): number {
-  return hash3(Math.floor(d.x * size), Math.floor(d.y * size), Math.floor(d.z * size));
-}
-
-/** Cell coordinates of a direction on the plate grid. */
-function plateCell(d: THREE.Vector3, size: number, out: [number, number, number]): void {
-  out[0] = Math.floor(d.x * size);
-  out[1] = Math.floor(d.y * size);
-  out[2] = Math.floor(d.z * size);
-}
+const WALL_DARK = new THREE.Color(0x2a3540);
+/** How close to a zone border a face must be to be part of the border line. */
+const BORDER_BAND = 0.012;
 
 /**
- * Colour for one ground face. Each plate picks one of its zone's three metals,
- * with a rare plate in the zone's accent.
+ * Icosphere whose faces share their vertices, so `computeVertexNormals` gives
+ * one smooth normal per direction instead of one per face. `rounds` doubles the
+ * edge subdivision each time: 6 rounds is 64 segments per edge.
  */
-function plateColor(b: Biome, h: number): number {
-  if (h > 0.93) return b.accent;
-  const palette = b.ground;
-  return h < 0.55 ? palette[0] : h < 0.82 ? palette[1] : palette[2];
-}
-
-const WALL_DARK = new THREE.Color(0x161d24);
-const WALL_LIGHT = new THREE.Color(0x51606c);
-
-export function buildGround(): THREE.Mesh {
-  const geo = new THREE.IcosahedronGeometry(1, 46);
-  const pos = geo.attributes.position as THREE.BufferAttribute;
-  const colors = new Float32Array(pos.count * 3);
-  const a = new THREE.Vector3();
-  const b = new THREE.Vector3();
-  const c = new THREE.Vector3();
-  const mid = new THREE.Vector3();
-  const col = new THREE.Color();
-  const ca: [number, number, number] = [0, 0, 0];
-  const cb: [number, number, number] = [0, 0, 0];
-  const cc: [number, number, number] = [0, 0, 0];
-  const cm: [number, number, number] = [0, 0, 0];
-
-  for (let i = 0; i < pos.count; i += 3) {
-    a.fromBufferAttribute(pos, i).normalize();
-    b.fromBufferAttribute(pos, i + 1).normalize();
-    c.fromBufferAttribute(pos, i + 2).normalize();
-    mid.copy(a).add(b).add(c).normalize();
-
-    const biome = biomeAt(mid);
-    const f = oceanField(mid);
-    let hex: number;
-    let seam = false;
-    if (biome === OCEAN) hex = OCEAN.ground[hash3(i, 3, 5) < 0.5 ? 0 : 1];
-    else if (f < 0.035) hex = biome.beach;
-    else {
-      const size = biome.id === 'citadel' ? 11 : biome.id === 'fortress' ? 8 : 9;
-      // A face that straddles a plate boundary is a seam: every face around it
-      // sits inside one cell. That gives seams exactly one face wide, so they
-      // read as cut lines rather than as a mottled grid.
-      plateCell(mid, size, cm);
-      plateCell(a, size, ca);
-      plateCell(b, size, cb);
-      plateCell(c, size, cc);
-      seam = cellDiffers(ca, cm) || cellDiffers(cb, cm) || cellDiffers(cc, cm);
-      hex = seam ? biome.ground[2] : plateColor(biome, hash3(cm[0], cm[1], cm[2]));
+function smoothSphere(rounds: number): THREE.BufferGeometry {
+  const t = (1 + Math.sqrt(5)) / 2;
+  const verts: THREE.Vector3[] = [];
+  const push = (x: number, y: number, z: number): number => {
+    verts.push(new THREE.Vector3(x, y, z).normalize());
+    return verts.length - 1;
+  };
+  push(-1, t, 0); push(1, t, 0); push(-1, -t, 0); push(1, -t, 0);
+  push(0, -1, t); push(0, 1, t); push(0, -1, -t); push(0, 1, -t);
+  push(t, 0, -1); push(t, 0, 1); push(-t, 0, -1); push(-t, 0, 1);
+  const base = [
+    0, 11, 5, 0, 5, 1, 0, 1, 7, 0, 7, 10, 0, 10, 11,
+    1, 5, 9, 5, 11, 4, 11, 10, 2, 10, 7, 6, 7, 1, 8,
+    3, 9, 4, 3, 4, 2, 3, 2, 6, 3, 6, 8, 3, 8, 9,
+    4, 9, 5, 2, 4, 11, 6, 2, 10, 8, 6, 7, 9, 8, 1
+  ];
+  let faces = base;
+  for (let r = 0; r < rounds; r++) {
+    const cache = new Map<number, number>();
+    const next: number[] = [];
+    const mid = (a: number, b: number): number => {
+      const key = a < b ? a * 65536 + b : b * 65536 + a;
+      const hit = cache.get(key);
+      if (hit !== undefined) return hit;
+      verts.push(verts[a].clone().add(verts[b]).normalize());
+      const i = verts.length - 1;
+      cache.set(key, i);
+      return i;
+    };
+    for (let f = 0; f < faces.length; f += 3) {
+      const a = faces[f];
+      const b = faces[f + 1];
+      const c = faces[f + 2];
+      const ab = mid(a, b);
+      const bc = mid(b, c);
+      const ca = mid(c, a);
+      next.push(a, ab, ca, b, bc, ab, c, ca, bc, ab, bc, ca);
     }
-    col.setHex(hex);
-
-    // Canyon walls: the ground climbing out of a channel is rougher and banded
-    // in strata, so the bank reads as cut rock rather than as a plate edge.
-    if (f >= 0 && f < 0.26 && biome !== OCEAN) {
-      const wall = 1 - Math.min(1, f / 0.26);
-      const strata = Math.sin(mid.y * 78 + mid.x * 11) * 0.5 + 0.5;
-      col.lerp(WALL_DARK, wall * 0.5);
-      col.lerp(WALL_LIGHT, wall * strata * 0.2);
-    }
-    // Seams sit darker than the plate they divide.
-    if (seam) col.multiplyScalar(0.82);
-    // Faint per-face variation keeps the flat shading from looking like a texture.
-    col.multiplyScalar(0.95 + hash3(i, 7, 13) * 0.1);
-
-    for (let k = 0; k < 3; k++) {
-      const p = k === 0 ? a : k === 1 ? b : c;
-      const r = surfaceRadius(p);
-      pos.setXYZ(i + k, p.x * r, p.y * r, p.z * r);
-      colors[(i + k) * 3] = col.r;
-      colors[(i + k) * 3 + 1] = col.g;
-      colors[(i + k) * 3 + 2] = col.b;
+    faces = next;
+  }
+  // The base table winds outward; make sure subdivision did not flip it.
+  const p0 = verts[faces[0]], p1 = verts[faces[1]], p2 = verts[faces[2]];
+  const n = new THREE.Vector3().crossVectors(p1.clone().sub(p0), p2.clone().sub(p0));
+  if (n.dot(p0) < 0) {
+    for (let f = 0; f < faces.length; f += 3) {
+      const tmp = faces[f + 1];
+      faces[f + 1] = faces[f + 2];
+      faces[f + 2] = tmp;
     }
   }
+  const positions = new Float32Array(verts.length * 3);
+  for (let i = 0; i < verts.length; i++) {
+    positions[i * 3] = verts[i].x;
+    positions[i * 3 + 1] = verts[i].y;
+    positions[i * 3 + 2] = verts[i].z;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setIndex(faces);
+  return geo;
+}
+
+const _pal = new THREE.Color();
+
+/**
+ * Ground colour at one direction. Everything is a function of position, so
+ * neighbouring vertices blend into each other: a low-frequency noise picks a
+ * place along the zone's palette and another low-frequency noise lifts or drops
+ * the tone. There are no plates, no seams and no per-face noise.
+ */
+function groundColor(d: THREE.Vector3, out: THREE.Color): THREE.Color {
+  const biome = biomeAt(d);
+  const f = oceanField(d);
+  if (biome === OCEAN) return out.setHex(OCEAN.ground[0]);
+  if (f < 0.05) return out.setHex(biome.beach);
+  const palette = biome.ground;
+  const n = palette.length;
+  // Wide palettes (the ark's five colours) need a tighter noise so separate
+  // regions still show; blending them at a broad scale would average every hue
+  // into one muddy tone.
+  const freq = n > 3 ? 7 : 2.2;
+  const t = THREE.MathUtils.clamp(fbm3(d.x * freq + 21, d.y * freq - 9, d.z * freq + 3, 2) * 0.5 + 0.5, 0, 1) * (n - 1);
+  const i0 = Math.min(n - 1, Math.floor(t));
+  const i1 = Math.min(n - 1, i0 + 1);
+  out.setHex(palette[i0]).lerp(_pal.setHex(palette[i1]), t - i0);
+  const shade = 1 + THREE.MathUtils.clamp(fbm3(d.x * 3.3 - 4, d.y * 3.3 + 8, d.z * 3.3 - 6, 2), -1, 1) * 0.12;
+  out.multiplyScalar(shade);
+  if (f < 0.3) out.lerp(WALL_DARK, (1 - f / 0.3) * 0.35);
+  return out;
+}
+
+export function buildGround(): THREE.Mesh {
+  const geo = smoothSphere(6);
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  const index = geo.index as THREE.BufferAttribute;
+  const colors = new Float32Array(pos.count * 3);
+  const d = new THREE.Vector3();
+  const col = new THREE.Color();
+
+  // Displace every shared vertex once, then colour it once.
+  for (let i = 0; i < pos.count; i++) {
+    d.fromBufferAttribute(pos, i).normalize();
+    const r = surfaceRadius(d);
+    pos.setXYZ(i, d.x * r, d.y * r, d.z * r);
+    groundColor(d, col);
+    colors[i * 3] = col.r;
+    colors[i * 3 + 1] = col.g;
+    colors[i * 3 + 2] = col.b;
+  }
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-  geo.deleteAttribute('uv');
   geo.computeVertexNormals();
 
   const mat = new THREE.MeshStandardMaterial({
     vertexColors: true,
-    flatShading: true,
-    // Pale metal, not a mirror: at night a high metalness has nothing to reflect
-    // and the ground reads as black.
-    roughness: 0.62,
-    metalness: 0.28,
-    // A floor of self-lit colour, so ground facing away from the moon still
-    // reads as metal plates rather than as a hole in the planet.
-    emissive: 0x0c1219
+    // The scene now carries an environment map, so the metal can stay low and
+    // still pick up a little sheen without washing the colours out.
+    roughness: 0.55,
+    metalness: 0.15
   });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
   mesh.name = 'ground';
-  return mesh;
-}
 
-/** True when two plate cells differ, the test that marks a seam face. */
-function cellDiffers(x: [number, number, number], y: [number, number, number]): boolean {
-  return x[0] !== y[0] || x[1] !== y[1] || x[2] !== y[2];
+  // A face straddling a zone border is repeated in a second, unlit mesh, so the
+  // border reads as a glowing line rather than as a change of colour.
+  const borderPos: number[] = [];
+  const borderCol: number[] = [];
+  const a = new THREE.Vector3();
+  const b = new THREE.Vector3();
+  const c = new THREE.Vector3();
+  const mid = new THREE.Vector3();
+  const edge = new THREE.Color();
+  for (let i = 0; i < index.count; i += 3) {
+    a.fromBufferAttribute(pos, index.getX(i)).normalize();
+    b.fromBufferAttribute(pos, index.getX(i + 1)).normalize();
+    c.fromBufferAttribute(pos, index.getX(i + 2)).normalize();
+    mid.copy(a).add(b).add(c).normalize();
+    const biome = biomeAt(mid);
+    if (biome === OCEAN) continue;
+    if (landBiomeBlend(mid).margin >= BORDER_BAND) continue;
+    edge.setHex(biome.accent);
+    const verts = [a, b, c];
+    for (const p of verts) {
+      const r = surfaceRadius(p) + 0.16;
+      borderPos.push(p.x * r, p.y * r, p.z * r);
+      borderCol.push(edge.r, edge.g, edge.b);
+    }
+  }
+  if (borderPos.length > 0) {
+    const borderGeo = new THREE.BufferGeometry();
+    borderGeo.setAttribute('position', new THREE.Float32BufferAttribute(borderPos, 3));
+    borderGeo.setAttribute('color', new THREE.Float32BufferAttribute(borderCol, 3));
+    const borderMesh = new THREE.Mesh(
+      borderGeo,
+      new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false, side: THREE.DoubleSide })
+    );
+    borderMesh.name = 'zone-border';
+    mesh.add(borderMesh);
+  }
+  return mesh;
 }
 
 /** Energy depth, in world units, at which the channel reads as fully open. */

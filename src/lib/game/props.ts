@@ -109,7 +109,7 @@ export function buildWorldProps(seed: number): WorldProps {
     }
   }
 
-  const solid = ctx.solid.build(new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.6, metalness: 0.35 }));
+  const solid = ctx.solid.build(new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.55, metalness: 0.15 }));
   const glow = ctx.glow.build(new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false }));
   const night = ctx.night.build(new THREE.MeshBasicMaterial({ vertexColors: true }));
   if (solid) {

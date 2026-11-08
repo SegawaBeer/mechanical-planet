@@ -15,12 +15,15 @@ export type Biome = {
   tagline: string;
   /** Unit vector pointing at the zone's heart on the sphere. */
   center: THREE.Vector3;
-  /** Plate palette: base colour plus a lighter and darker variant. */
-  ground: [number, number, number];
+  /** Plate palette, one to five metals. Any length: the ark uses a full
+   * dopamine patchwork, the others two or three tones of one metal. */
+  ground: readonly number[];
   /** Rare plates in the zone's signature colour. */
   accent: number;
   /** Metal at the lip of an energy channel. */
   beach: number;
+  /** Colour of the seam between two plates. */
+  seam: number;
 };
 
 function dir(x: number, y: number, z: number): THREE.Vector3 {
@@ -35,9 +38,11 @@ export const BIOMES: Biome[] = [
     index: '01',
     tagline: '星球的能量脉络在峡谷间奔流。',
     center: dir(0.55, 0.3, 0.78),
-    ground: [0x6f8492, 0x8098a8, 0x5d707d],
-    accent: 0x4fb3c4,
-    beach: 0x3f8794
+    // Cold steel teal: the metal that the energy rivers cut through.
+    ground: [0x7fb3b8, 0xa9d6d6, 0x628f96],
+    accent: 0x2fe6ff,
+    beach: 0x5aa0a8,
+    seam: 0x3f7980
   },
   {
     id: 'citadel',
@@ -46,9 +51,11 @@ export const BIOMES: Biome[] = [
     index: '02',
     tagline: '层层塔楼守着最后的灯火。',
     center: dir(-0.72, 0.28, 0.6),
-    ground: [0x9aa6b4, 0xb2bec9, 0x8b96a3],
-    accent: 0xc0d0e4,
-    beach: 0x7c8896
+    // Sunny silver-white with warm gold plates.
+    ground: [0xd8d2c4, 0xe3b552, 0xbdb6a6],
+    accent: 0xffd98a,
+    beach: 0xb3a488,
+    seam: 0x8d8574
   },
   {
     id: 'ark',
@@ -57,9 +64,11 @@ export const BIOMES: Biome[] = [
     index: '03',
     tagline: '沉睡的巨舰半埋在大地里。',
     center: dir(0.82, -0.2, -0.5),
-    ground: [0x9b8874, 0xb09c86, 0x86735f],
-    accent: 0xc08a55,
-    beach: 0x87837a
+    // Dopamine patchwork: five saturated plates, picked at random.
+    ground: [0xff5d8f, 0xff9f43, 0xffd93d, 0x3ddbb5, 0x4d7cff],
+    accent: 0xfff0f4,
+    beach: 0xd9c2a8,
+    seam: 0x8a4a72
   },
   {
     id: 'fortress',
@@ -68,9 +77,11 @@ export const BIOMES: Biome[] = [
     index: '04',
     tagline: '越靠近，越危险。',
     center: dir(-0.35, -0.55, -0.72),
-    ground: [0x5b4d6e, 0x6c5c80, 0x4a3f5b],
-    accent: 0x8f5fab,
-    beach: 0x5d4168
+    // Purple black with magenta-lit seams.
+    ground: [0x2b2135, 0x3d2c4f, 0x241b2e],
+    accent: 0xff2f8a,
+    beach: 0x4a2f56,
+    seam: 0xff2f8a
   }
 ];
 
@@ -84,7 +95,8 @@ export const OCEAN: Biome = {
   center: dir(0, -1, 0),
   ground: [0x16222b, 0x1b2a34, 0x121d25],
   accent: 0x121d25,
-  beach: 0x121d25
+  beach: 0x121d25,
+  seam: 0x0d151c
 };
 
 const LAND_BIOMES = BIOMES;
@@ -155,21 +167,19 @@ function angleTo(b: Biome, d: THREE.Vector3): number {
   return Math.acos(THREE.MathUtils.clamp(b.center.dot(d), -1, 1));
 }
 
-const _blend: { primary: Biome; secondary: Biome; mix: number } = {
+const _blend: { primary: Biome; secondary: Biome; mix: number; margin: number } = {
   primary: LAND_BIOMES[0],
   secondary: LAND_BIOMES[1],
-  mix: 0
+  mix: 0,
+  margin: 1
 };
 
 /**
- * The two zones nearest `d` and how much the ground should favour the second.
- *
- * Zone shaping runs on whichever zone owns a point, so a hard height step would
- * sit along every border. Handing the caller the runner-up and a weight that
- * falls off within a few surface units lets the terrain cross-fade its shapes
- * instead of breaking into a cliff.
+ * The two zones nearest `d`, how much the ground should favour the second, and
+ * how far `d` is from the border. The blend band is one surface unit wide, so a
+ * zone change reads as a boundary rather than as a smear.
  */
-export function landBiomeBlend(d: THREE.Vector3): { primary: Biome; secondary: Biome; mix: number } {
+export function landBiomeBlend(d: THREE.Vector3): { primary: Biome; secondary: Biome; mix: number; margin: number } {
   const warp = fbm3(d.x * 2.3 + 5, d.y * 2.3, d.z * 2.3 - 3, 3) * 0.22;
   let primary = LAND_BIOMES[0];
   let bestScore = Infinity;
@@ -189,7 +199,8 @@ export function landBiomeBlend(d: THREE.Vector3): { primary: Biome; secondary: B
   }
   _blend.primary = primary;
   _blend.secondary = secondary;
-  _blend.mix = 0.5 * (1 - THREE.MathUtils.smoothstep(secondScore - bestScore, 0, 0.07));
+  _blend.margin = secondScore - bestScore;
+  _blend.mix = 0.5 * (1 - THREE.MathUtils.smoothstep(_blend.margin, 0, 1 / PLANET_RADIUS_LOCAL));
   return _blend;
 }
 
