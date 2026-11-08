@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { biomeAt, configureBiomeOcean, isOcean, oceanField, OCEAN, type Biome } from './biomes';
+import { biomeAt, configureBiomeOcean, isOcean, landBiomeAt, oceanField, OCEAN, type Biome } from './biomes';
 import { deriveSeed, fbm3, hash3, seededRng } from './noise';
 import type { PlanetProfile } from './space';
 
@@ -11,10 +11,7 @@ let terrainReliefScale = 1;
 let terrainRuggedScale = 1;
 let terrainDetailScale = 1;
 let terrainCreaseFrequency = 3.2;
-let terrainTerrace = 0;
 let planetWater = 0x256a8c;
-let planetTerrain: readonly [number, number, number] | null = null;
-let planetShore = 0;
 
 /** Apply a profile to all subsequently generated terrain and water. */
 export function configurePlanet(profile: PlanetProfile): void {
@@ -24,52 +21,48 @@ export function configurePlanet(profile: PlanetProfile): void {
   terrainRuggedScale = ruggedness;
   terrainDetailScale = THREE.MathUtils.lerp(1, ruggedness, 0.65);
   terrainCreaseFrequency = 3.2 * (1 + (ruggedness - 1) * 0.25);
-  terrainTerrace = profile.archetype === 'crystal' ? 0.42 : profile.archetype === 'fracture' ? 0.68 : 0;
   planetWater = profile.water;
-  planetTerrain = profile.archetype === 'earth' ? null : profile.terrain;
-  planetShore = profile.shore;
   configureBiomeOcean(profile);
 }
 
 /**
  * Distance from the planet centre to the ground along unit direction `d`.
  *
- * Land is three layers of noise on top of each other: a broad swell that makes
- * the difference between a valley and a plateau, a ridged term gated by a
- * "ruggedness" field so some regions crumple into hills while others stay open,
- * and a fine roll for texture. Every layer's amplitude is kept in proportion to
- * its wavelength, because the props stand on this ground and a slope steep
- * enough to leave them hanging in the air is worse than a flat world.
+ * The world is plated metal. A broad swell and a fine roll give every zone
+ * some lift; on top of that each zone shapes its own ground. Energy channels
+ * cut steep-walled canyons, the citadel climbs in stepped tiers, the ark dock
+ * flattens into a deck around the hull, and the fortress sits on a raised
+ * plateau. Every layer stays gentle enough that props never hang in the air.
  */
 export function surfaceRadius(d: THREE.Vector3): number {
   const f = oceanField(d);
   const reliefScale = terrainReliefScale;
-  const ruggedScale = terrainRuggedScale;
   const detailScale = terrainDetailScale;
   if (f < 0) {
-    // Seabed: falls away from the coast so the water reads as deeper offshore.
-    const depth = Math.min(1, -f * 4);
-    const relief = fbm3(d.x * 6 + 3, d.y * 6, d.z * 6 - 1, 3) * 0.45;
-    return PLANET_RADIUS - 0.25 - depth * 1.6 + relief * 0.3 * reliefScale;
+    // Channel bed: drops away from the bank so the flow reads as deep.
+    const depth = Math.min(1, -f * 14);
+    return PLANET_RADIUS - 0.35 - depth * 1.3;
   }
-  // A short cliff at the waterline, then the relief eases in over the shore so
-  // the beaches stay walkable and the coastline keeps its shape.
-  const rise = Math.min(1, f * 5);
-  const swell = fbm3(d.x * 1.9 - 7, d.y * 1.9 + 4, d.z * 1.9 + 9, 3) * 2.2 * reliefScale;
-  const roll = fbm3(d.x * 6 + 3, d.y * 6, d.z * 6 - 1, 3) * 0.55 * detailScale;
-  const rugged = Math.max(0, fbm3(d.x * 1.4 + 21, d.y * 1.4 - 8, d.z * 1.4 + 3, 2));
-  // A ridged fBm: folding the noise about zero turns its valleys into creases.
-  const crease = 1 - Math.abs(
-    fbm3(d.x * terrainCreaseFrequency - 12, d.y * terrainCreaseFrequency + 6, d.z * terrainCreaseFrequency - 2, 4)
-  );
-  const h = 0.5 + swell + roll + rugged * crease * crease * 2.8 * ruggedScale;
-  // Dips are squashed and floored. Land is decided by `oceanField`, not by
-  // height, so a valley deep enough to fall under `SEA_LEVEL` would leave dry
-  // ground — and any prop or wonder standing on it — hidden under the water
-  // sphere. The floor keeps every land point just clear of the waterline.
-  const shaped = h >= 0 ? h : Math.max(-0.25, h * 0.15);
-  const formed = terrainTerrace > 0 ? Math.round(shaped / terrainTerrace) * terrainTerrace : shaped;
-  return PLANET_RADIUS + 0.7 + rise * formed;
+  const zone = landBiomeAt(d);
+  // Canyon walls: a short steep rise out of the channel, then the plates.
+  const rise = Math.min(1, f * 9);
+  const swell = fbm3(d.x * 1.9 - 7, d.y * 1.9 + 4, d.z * 1.9 + 9, 3) * 1.4 * reliefScale;
+  const roll = fbm3(d.x * 6 + 3, d.y * 6, d.z * 6 - 1, 3) * 0.35 * detailScale;
+  const near = THREE.MathUtils.smoothstep(Math.acos(THREE.MathUtils.clamp(zone.center.dot(d), -1, 1)), 0.55, 0.2);
+  let h = 0.6 + swell + roll;
+  if (zone.id === 'river') {
+    // Ridged mesas between the channels: the canyon country.
+    const crease = 1 - Math.abs(fbm3(d.x * terrainCreaseFrequency - 12, d.y * terrainCreaseFrequency + 6, d.z * terrainCreaseFrequency - 2, 3));
+    h += crease * crease * 1.6 * terrainRuggedScale;
+  } else if (zone.id === 'citadel') {
+    h = Math.round((h + 0.4 * near) / 0.45) * 0.45;
+  } else if (zone.id === 'ark') {
+    h = THREE.MathUtils.lerp(h, 0.55, near * 0.85);
+  } else if (zone.id === 'fortress') {
+    h = Math.round((h + 1.1 * near) / 0.7) * 0.7;
+  }
+  const shaped = h >= 0 ? h : Math.max(-0.2, h * 0.15);
+  return PLANET_RADIUS + 0.7 + rise * shaped;
 }
 
 const _na = new THREE.Vector3();
@@ -152,9 +145,24 @@ export function offsetDir(d: THREE.Vector3, east: number, north: number): THREE.
   return d;
 }
 
-function pickShade(b: Biome, h: number): number {
-  const palette = planetTerrain ?? b.ground;
-  return h < 0.62 ? palette[0] : h < 0.84 ? palette[1] : palette[2];
+/** Plate cell of a direction: faces in one cell share a plate colour. */
+function plateHash(d: THREE.Vector3, size: number): number {
+  return hash3(Math.floor(d.x * size), Math.floor(d.y * size), Math.floor(d.z * size));
+}
+
+/**
+ * Colour for one ground face. Faces are grouped into plates on a coarse grid,
+ * each plate picking one of its zone's three metals, with a rare plate in the
+ * zone's accent. A finer grid lays darker seams between the plates.
+ */
+function plateColor(b: Biome, d: THREE.Vector3): number {
+  const size = b.id === 'citadel' ? 11 : b.id === 'fortress' ? 8 : 9;
+  const h = plateHash(d, size);
+  if (h > 0.93) return b.accent;
+  const seam = plateHash(d, size * 3) < 0.12;
+  const palette = b.ground;
+  const hex = h < 0.55 ? palette[0] : h < 0.82 ? palette[1] : palette[2];
+  return seam ? palette[2] : hex;
 }
 
 export function buildGround(): THREE.Mesh {
@@ -175,25 +183,13 @@ export function buildGround(): THREE.Mesh {
 
     const biome = biomeAt(mid);
     const f = oceanField(mid);
-    const h = hash3(Math.round(mid.x * 997), Math.round(mid.y * 991), Math.round(mid.z * 983));
     let hex: number;
-    if (biome === OCEAN) {
-      hex = planetTerrain ? planetTerrain[0] : pickShade(OCEAN, h);
-    } else if (f < 0.09) {
-      hex = planetTerrain ? planetShore : biome.beach;
-    } else {
-      hex = pickShade(biome, h);
-    }
+    if (biome === OCEAN) hex = OCEAN.ground[hash3(i, 3, 5) < 0.5 ? 0 : 1];
+    else if (f < 0.035) hex = biome.beach;
+    else hex = plateColor(biome, mid);
     col.setHex(hex);
-    if (planetTerrain && biome !== OCEAN) {
-      // Preserve readable regions on alien worlds without reverting to Earth's
-      // greens, snow, and sand: each Voronoi biome shifts the shared geology.
-      const region = Math.max(0, Number.parseInt(biome.index, 10) - 1);
-      col.offsetHSL(((region % 4) - 1.5) * 0.018, 0, ((region % 3) - 1) * 0.035);
-    }
     // Faint per-face variation keeps the flat shading from looking like a texture.
-    const v = 0.96 + hash3(i, 7, 13) * 0.08;
-    col.multiplyScalar(v);
+    col.multiplyScalar(0.95 + hash3(i, 7, 13) * 0.1);
 
     for (let k = 0; k < 3; k++) {
       const p = k === 0 ? a : k === 1 ? b : c;
@@ -211,8 +207,8 @@ export function buildGround(): THREE.Mesh {
   const mat = new THREE.MeshStandardMaterial({
     vertexColors: true,
     flatShading: true,
-    roughness: 0.95,
-    metalness: 0
+    roughness: 0.55,
+    metalness: 0.45
   });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
