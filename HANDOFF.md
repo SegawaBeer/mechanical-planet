@@ -19,6 +19,20 @@ Deadline: hand work back by the time in your brief. The coordinator reviews and 
 5. Do not run git commands. The coordinator commits.
 6. Do not add npm packages.
 
+## Shared layout every session must respect
+- Each zone centre (east 0, north 0) holds that zone's beacon. Keep a circle of radius 3 around it free of solid props.
+- Each zone has one controllable robot standing at (east 4, north -4). Keep a circle of radius 1.5 there free.
+- The player starts in the river zone at about (east 1.4, north -3.6). Keep it free.
+- A robot must be able to walk from every zone to every other zone. Leave gaps in walls and leave walkable ground or bridges across the energy channels.
+- Landmarks sit within about 18 surface units of their zone centre. Zone centres are about 80 units apart.
+
+## Controls, final mapping (for anyone writing help text)
+- Arrow keys or W A S D: up and down move forward and back, left and right turn.
+- Shift: run, or boost in vehicle form. Space: jump, robot form only.
+- F: transform between robot form and vehicle form.
+- E: interact with a beacon. Click another robot to take control of it. Tab: back to the protagonist.
+- M: globe view. J: journal. H: help.
+
 ## When you finish
-- Save 2 to 3 screenshots of your work into `shots/` (use the Browser preview tools if you have them; otherwise describe what to look at).
-- Final message: what you built, which files you changed, what is not done or looks wrong.
+- Look at your work in the Browser preview yourself before reporting.
+- Final message: what you built, which files you changed, what is not done or looks wrong. Type errors in files that are not yours belong to another session; mention them, do not fix them.
