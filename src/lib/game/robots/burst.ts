@@ -24,7 +24,7 @@ export class TransformBurst {
     const ringGeo = new THREE.RingGeometry(0.82, 1.06, 40);
     this.owned.push(ringGeo);
     const ringMat = new THREE.MeshBasicMaterial({
-      color: 0x3fe4ff,
+      color: 0x18c8ff,
       transparent: true,
       opacity: 0,
       side: THREE.DoubleSide,
@@ -103,14 +103,14 @@ export class TransformBurst {
     const ringScale = 0.45 + ringT * 2.7;
     this.ringMain.scale.setScalar(ringScale);
     this.ringMain.position.y = 0.05 + t * 0.6;
-    (this.ringMain.material as THREE.MeshBasicMaterial).opacity = Math.max(0, (1 - ringT) * 0.9);
+    (this.ringMain.material as THREE.MeshBasicMaterial).opacity = Math.max(0, (1 - ringT) * 0.7);
     const lowT = Math.min(1, t / 0.9);
     this.ringLow.scale.setScalar(0.4 + lowT * 3.3);
     (this.ringLow.material as THREE.MeshBasicMaterial).opacity = Math.max(0, (1 - lowT) * 0.7);
 
     const grow = Math.sin(Math.min(1, t * 1.35) * Math.PI * 0.62);
     this.glow.scale.setScalar(0.6 + grow * 0.9);
-    (this.glow.material as THREE.MeshBasicMaterial).opacity = Math.max(0, Math.sin(t * Math.PI) * 0.34);
+    (this.glow.material as THREE.MeshBasicMaterial).opacity = Math.max(0, Math.sin(t * Math.PI) * 0.26);
 
     const pos = this.sparks.geometry.getAttribute('position') as THREE.BufferAttribute;
     const reach = 0.5 + t * 4.2;

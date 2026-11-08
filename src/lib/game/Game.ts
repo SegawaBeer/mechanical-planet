@@ -49,6 +49,7 @@ import { Shards } from './shards';
 import { Fireworks } from './fireworks';
 import { Protagonist, type Form } from './robots/protagonist';
 import { TransformBurst } from './robots/burst';
+import type { SchemeId } from './robots/scheme';
 import { controlState } from './ui/control';
 import {
   JOURNAL_BIOMES,
@@ -182,6 +183,23 @@ type Gem = {
   light: Emitter;
 };
 
+/** One machine the player may drive, and where it stands while idle. */
+type Crew = {
+  rig: Protagonist;
+  id: SchemeId;
+  /** Unit direction on the sphere: where the machine is standing. */
+  dir: THREE.Vector3;
+  /** Tangent forward direction: which way it is facing. */
+  heading: THREE.Vector3;
+};
+
+const CREW_NAMES: Record<'river' | 'citadel' | 'ark' | 'fortress', string> = {
+  river: '河道巡逻者',
+  citadel: '铁堡守卫',
+  ark: '方舟工程师',
+  fortress: '要塞斥候'
+};
+
 export class Game {
   readonly input: Input;
   readonly audio = new Ambience();
@@ -221,6 +239,12 @@ export class Game {
   private dir = new THREE.Vector3();
   private heading = new THREE.Vector3();
   private player: Protagonist;
+  /** Every machine the player can take over; the protagonist is first. */
+  private crews: Crew[] = [];
+  private activeCrew: Crew | null = null;
+  private readonly ndc = new THREE.Vector2();
+  /** Shared state object for machines standing idle. */
+  private idleState = { speed: 0, speed01: 0, airborne: false, steer: 0, time: 0 };
   private burst = new TransformBurst();
   private hopH = 0;
   private hopV = 0;
@@ -467,10 +491,30 @@ export class Game {
     this.heading.copy(fire).addScaledVector(this.dir, -fire.dot(this.dir)).normalize();
     this.camForward.copy(this.heading);
     this.player = new Protagonist('hero', '主角');
-    this.player.root.traverse((o) => {
-      if (o instanceof THREE.Mesh) o.castShadow = true;
-    });
-    this.scene.add(this.player.root, this.burst.group);
+    this.activeCrew = { rig: this.player, id: 'hero', dir: this.dir.clone(), heading: this.heading.clone() };
+    this.crews.push(this.activeCrew);
+
+    // One machine per zone, standing a few steps off its beacon and facing it.
+    for (const id of ['river', 'citadel', 'ark', 'fortress'] as const) {
+      const rig = new Protagonist(id, CREW_NAMES[id]);
+      const centre = biomeById(id).center;
+      const d = offsetDir(centre.clone(), 4, -4);
+      this.colliders.resolve(d, PLAYER_RADIUS);
+      const facing = centre.clone().addScaledVector(d, -centre.dot(d));
+      if (facing.lengthSq() < 1e-8) tangentBasis(d, 0, _v1, facing);
+      facing.normalize();
+      this.placeRig(rig.root, d, facing);
+      this.crews.push({ rig, id, dir: d, heading: facing });
+    }
+    for (const crew of this.crews) {
+      crew.rig.root.traverse((o) => {
+        if (o instanceof THREE.Mesh) o.castShadow = true;
+      });
+      // The picking sphere is invisible and must not drop a shadow.
+      crew.rig.hit.castShadow = false;
+      this.scene.add(crew.rig.root);
+    }
+    this.scene.add(this.burst.group);
     this.placePlayer();
     this.publishControl();
 
@@ -514,6 +558,7 @@ export class Game {
     this.overlayOpen = open;
     this.input.enabled = !open;
     if (open) {
+      this.canvas.style.cursor = '';
       this.input.touchMove.x = 0;
       this.input.touchMove.y = 0;
       this.input.touchRun = false;
@@ -710,6 +755,7 @@ export class Game {
       this.globeYaw = Math.atan2(d.x, d.z);
     }
     this.setShadowBounds(on ? PLANET_RADIUS + 14 : 30);
+    this.canvas.style.cursor = '';
     this.callbacks.onGlobe(on);
   }
 
@@ -818,13 +864,19 @@ export class Game {
       else this.camDist = THREE.MathUtils.clamp(this.camDist * Math.exp(zoom * 0.12), CAM_MIN, CAM_MAX);
     }
 
-    // A click on the ground no longer walks anywhere. Clicks are only read to
-    // pick another robot; the hero is the only machine right now.
-    void click;
+    // Clicking a machine takes it over; a click on the ground does nothing.
+    if (click && !this.overlayOpen && !this.globe && !this.flying) this.pickCrew(click);
+    if (input.takeHoverChange()) this.updatePickCursor();
 
     if (transform && !this.overlayOpen) {
       if (this.globe) this.setGlobe(false);
       this.startTransform();
+    }
+
+    // Tab hands control back to the protagonist, wherever it was left standing.
+    if (input.consumeHeroReturn() && !this.overlayOpen && !this.globe) {
+      const hero = this.crews[0];
+      if (hero) this.takeControl(hero);
     }
 
     if (hop && !this.overlayOpen && this.player.form === 'robot') {
@@ -1059,14 +1111,104 @@ export class Game {
     }
   }
 
-  /** Stand the machine on the surface at `dir`, facing `heading`. */
+  /** Stand the driven machine on the surface at `dir`, facing `heading`. */
   private placePlayer(): void {
-    const g = this.player.root;
-    const r = walkRadius(this.dir) + this.hopH;
-    g.position.copy(this.dir).multiplyScalar(r);
-    _v2.crossVectors(this.dir, this.heading).normalize();
-    _m.makeBasis(_v2, this.dir, this.heading);
-    g.quaternion.setFromRotationMatrix(_m);
+    this.placeRig(this.player.root, this.dir, this.heading, this.hopH);
+  }
+
+  /** Stand any machine on the surface, with its own up and forward. */
+  private placeRig(root: THREE.Object3D, dir: THREE.Vector3, heading: THREE.Vector3, lift = 0): void {
+    root.position.copy(dir).multiplyScalar(walkRadius(dir) + lift);
+    _v2.crossVectors(dir, heading).normalize();
+    _m.makeBasis(_v2, dir, heading);
+    root.quaternion.setFromRotationMatrix(_m);
+  }
+
+  // ---------------------------------------------------------------- take-over
+
+  /**
+   * Hand control to another machine. Its own position, heading and form are
+   * restored; the one being left stands exactly where it was, idling.
+   */
+  private takeControl(crew: Crew): void {
+    if (crew === this.activeCrew) return;
+    if (this.activeCrew) {
+      this.activeCrew.dir.copy(this.dir);
+      this.activeCrew.heading.copy(this.heading);
+    }
+    this.activeCrew = crew;
+    this.player = crew.rig;
+    this.dir.copy(crew.dir);
+    this.heading.copy(crew.heading);
+    this.camForward.copy(this.heading);
+    this.moveSpeed = 0;
+    this.steer = 0;
+    this.airborne = false;
+    this.hopH = 0;
+    this.hopV = 0;
+    this.transformTime = 0;
+    this.transformSwapped = false;
+    this.biomeTimer = 0;
+    this.biomeId = null;
+    this.orbitHold = 0;
+    // A long transition is what turns into a camera flight across the planet.
+    this.transition = 1.4;
+    if (this.globe) this.setGlobe(false);
+    this.audio.start();
+    this.audio.hop();
+    this.placePlayer();
+    this.publishControl();
+    this.updatePickCursor();
+    this.promptId = null;
+  }
+
+  /** Resolve a screen click against the machines that are not being driven. */
+  private pickCrew(click: { x: number; y: number }): void {
+    const candidates = this.crews.filter((c) => c.rig !== this.player);
+    this.ndc.set(click.x, click.y);
+    this.raycaster.setFromCamera(this.ndc, this.camera);
+    const hits = this.raycaster.intersectObjects(candidates.map((c) => c.rig.hit), false);
+    if (hits.length === 0) return;
+    const crew = candidates.find((c) => c.rig.hit === hits[0].object);
+    if (crew) this.takeControl(crew);
+  }
+
+  /** A hand cursor while the pointer is over a machine that can be taken over. */
+  private updatePickCursor(): void {
+    const hover = this.input.hoverPointer;
+    if (!hover || this.overlayOpen || this.globe || this.flying) {
+      this.canvas.style.cursor = '';
+      return;
+    }
+    const candidates = this.crews.filter((c) => c.rig !== this.player);
+    this.ndc.set(hover.x, hover.y);
+    this.raycaster.setFromCamera(this.ndc, this.camera);
+    const hit = this.raycaster.intersectObjects(candidates.map((c) => c.rig.hit), false).length > 0;
+    this.canvas.style.cursor = hit ? 'pointer' : '';
+  }
+
+  /**
+   * Swap in external models as they resolve. `load` is called once per machine
+   * id and form; a null result or a rejection keeps that built-in form.
+   */
+  async loadModels(load: (id: SchemeId, form: Form) => Promise<THREE.Object3D | null>): Promise<void> {
+    await Promise.all(
+      this.crews.map(async ({ rig, id }) => {
+        for (const form of ['robot', 'vehicle'] as const) {
+          let model: THREE.Object3D | null = null;
+          try {
+            model = await load(id, form);
+          } catch {
+            model = null;
+          }
+          if (!model || this.disposed) continue;
+          model.traverse((o) => {
+            if (o instanceof THREE.Mesh) o.castShadow = true;
+          });
+          rig.setFormObject(form, model);
+        }
+      })
+    );
   }
 
   // ---------------------------------------------------------------- camera
@@ -1198,7 +1340,11 @@ export class Game {
       g.light.intensity = 15 * pulse;
     }
 
-    // Hand the pooled lights to whichever sources are nearest the active traveller.
+    // Machines nobody is driving look around on their own.
+    this.idleState.time = t;
+    for (const crew of this.crews) if (crew.rig !== this.player) crew.rig.update(dt, this.idleState);
+
+    // Hand the pooled lights to whichever sources are nearest the active machine.
     this.lights.update(t, this.flying ? this.ship.position : this.player.root.position);
   }
 

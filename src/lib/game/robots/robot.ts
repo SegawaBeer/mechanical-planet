@@ -117,6 +117,9 @@ export function buildRobot(scheme: Scheme): RobotForm {
 
   let phase = 0;
   let lastHalf = 0;
+  // Each machine looks around on its own clock, so a row of idle robots does
+  // not sway in lockstep.
+  const idlePhase = Math.random() * Math.PI * 2;
 
   const anim: FormAnim = (dt, s) => {
     let strike = false;
@@ -134,14 +137,18 @@ export function buildRobot(scheme: Scheme): RobotForm {
       return false;
     }
     if (Math.abs(s.speed) < 0.12) {
-      // Idle: settle to a planted stance and breathe.
+      // Idle: settle to a planted stance, breathe, and slowly look around.
       const k = Math.min(1, dt * 8);
       for (const o of [legL.hip, legR.hip, legL.knee, legR.knee]) o.rotation.x += (0 - o.rotation.x) * k;
       armL.shoulder.rotation.x += (0.05 - armL.shoulder.rotation.x) * k;
       armR.shoulder.rotation.x += (0.05 - armR.shoulder.rotation.x) * k;
       armL.elbow.rotation.x += (-0.18 - armL.elbow.rotation.x) * k;
       armR.elbow.rotation.x += (-0.18 - armR.elbow.rotation.x) * k;
-      torso.rotation.set(0, 0, 0);
+      const look = Math.sin(s.time * 0.5 + idlePhase);
+      torso.rotation.x = 0;
+      torso.rotation.z = 0;
+      torso.rotation.y = look * 0.18;
+      head.rotation.y = look * 0.4;
       body.position.y = Math.sin(s.time * 1.8) * 0.014;
       phase = 0;
       lastHalf = 0;
@@ -171,6 +178,7 @@ export function buildRobot(scheme: Scheme): RobotForm {
 
     torso.rotation.x = 0.04 + 0.16 * gait;
     torso.rotation.y = -swing * 0.1;
+    head.rotation.y += (0 - head.rotation.y) * Math.min(1, dt * 6);
     body.position.y = Math.abs(Math.cos(phase * Math.PI * 2)) * 0.05 * gait;
     return strike;
   };

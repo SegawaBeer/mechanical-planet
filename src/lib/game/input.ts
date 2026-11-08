@@ -2,6 +2,7 @@
 // polls this each frame; one-shot actions are queued and consumed once.
 
 export type Click = { x: number; y: number };
+export type Hover = { x: number; y: number };
 
 // Tank layout: up/down drive forward and back along the robot's own heading,
 // left/right turn that heading.
@@ -24,6 +25,8 @@ export class Input {
   touchRun = false;
   /** When false, keys and clicks are ignored (an overlay is open). */
   enabled = true;
+  /** Latest pointer position in normalised device coordinates, or null off-canvas. */
+  hoverPointer: Hover | null = null;
 
   private keys = new Set<string>();
   private hopQueued = false;
@@ -40,6 +43,7 @@ export class Input {
   private zoom = 0;
   private click: Click | null = null;
   private pointers = new Map<number, { x: number; y: number }>();
+  private hoverMoved = false;
   private dragStart: { x: number; y: number } | null = null;
   private dragged = false;
   private pinchDist = 0;
@@ -55,6 +59,7 @@ export class Input {
     canvas.addEventListener('pointermove', this.onPointerMove);
     canvas.addEventListener('pointerup', this.onPointerUp);
     canvas.addEventListener('pointercancel', this.onPointerUp);
+    canvas.addEventListener('pointerleave', this.onPointerLeave);
     canvas.addEventListener('wheel', this.onWheel, { passive: false });
     canvas.addEventListener('contextmenu', this.onContext);
   }
@@ -178,6 +183,12 @@ export class Input {
     this.zoom = 0;
     return z;
   }
+  /** True once after the pointer moves or leaves the canvas. */
+  takeHoverChange(): boolean {
+    const v = this.hoverMoved;
+    this.hoverMoved = false;
+    return v;
+  }
   consumeClick(): Click | null {
     const c = this.click;
     this.click = null;
@@ -265,7 +276,12 @@ export class Input {
 
   private onPointerMove = (e: PointerEvent) => {
     const prev = this.pointers.get(e.pointerId);
-    if (!prev) return;
+    if (!prev) {
+      // No button held: this is a hover, used for the pick cursor.
+      this.hoverPointer = this.toNdc(e);
+      this.hoverMoved = true;
+      return;
+    }
     const dx = e.clientX - prev.x;
     const dy = e.clientY - prev.y;
     this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -292,16 +308,17 @@ export class Input {
     if (!had) return;
     if (this.pointers.size === 0) {
       if (!this.dragged && this.dragStart && this.enabled) {
-        const rect = this.canvas.getBoundingClientRect();
-        this.click = {
-          x: ((e.clientX - rect.left) / rect.width) * 2 - 1,
-          y: -((e.clientY - rect.top) / rect.height) * 2 + 1
-        };
+        this.click = this.toNdc(e);
         this.fireAny();
       }
       this.dragStart = null;
       this.dragged = false;
     }
+  };
+
+  private onPointerLeave = () => {
+    this.hoverPointer = null;
+    this.hoverMoved = true;
   };
 
   private onWheel = (e: WheelEvent) => {
@@ -310,6 +327,14 @@ export class Input {
   };
 
   private onContext = (e: Event) => e.preventDefault();
+
+  private toNdc(e: PointerEvent): Hover {
+    const rect = this.canvas.getBoundingClientRect();
+    return {
+      x: ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      y: -((e.clientY - rect.top) / rect.height) * 2 + 1
+    };
+  }
 
   private pointerDistance(): number {
     const pts = [...this.pointers.values()];
@@ -325,6 +350,7 @@ export class Input {
     this.canvas.removeEventListener('pointermove', this.onPointerMove);
     this.canvas.removeEventListener('pointerup', this.onPointerUp);
     this.canvas.removeEventListener('pointercancel', this.onPointerUp);
+    this.canvas.removeEventListener('pointerleave', this.onPointerLeave);
     this.canvas.removeEventListener('wheel', this.onWheel);
     this.canvas.removeEventListener('contextmenu', this.onContext);
   }

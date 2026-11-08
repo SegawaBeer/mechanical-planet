@@ -22,6 +22,12 @@ export class Protagonist {
   form: Form = 'robot';
   /** True on the frame a foot lands, for the footstep sound. */
   footStrike = false;
+  /**
+   * Invisible sphere over the machine. Picking and the hover cursor raycast
+   * against this rather than the model, so a thin or dense model is still easy
+   * to click.
+   */
+  readonly hit: THREE.Mesh;
 
   private robot: Animated;
   private vehicle: Animated;
@@ -32,6 +38,11 @@ export class Protagonist {
     const colours = SCHEMES[scheme];
     this.robot = buildRobot(colours).root as Animated;
     this.vehicle = buildVehicle(colours).root as Animated;
+    this.hit = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 8, 6),
+      new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false })
+    );
+    this.hit.position.y = 0.9;
     this.attach();
   }
 
@@ -44,6 +55,13 @@ export class Protagonist {
   setForms(robot: THREE.Object3D, vehicle: THREE.Object3D): void {
     this.robot = robot as Animated;
     this.vehicle = vehicle as Animated;
+    this.attach();
+  }
+
+  /** Replace one form only; the other keeps its built-in model. */
+  setFormObject(form: Form, object: THREE.Object3D): void {
+    if (form === 'robot') this.robot = object as Animated;
+    else this.vehicle = object as Animated;
     this.attach();
   }
 
@@ -65,6 +83,6 @@ export class Protagonist {
 
   private attach(): void {
     for (const child of [...this.root.children]) this.root.remove(child);
-    this.root.add(this.form === 'robot' ? this.robot : this.vehicle);
+    this.root.add(this.form === 'robot' ? this.robot : this.vehicle, this.hit);
   }
 }

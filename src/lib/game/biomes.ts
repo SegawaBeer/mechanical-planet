@@ -35,9 +35,9 @@ export const BIOMES: Biome[] = [
     index: '01',
     tagline: '星球的能量脉络在峡谷间奔流。',
     center: dir(0.55, 0.3, 0.78),
-    ground: [0x3b4b57, 0x46596a, 0x313f4a],
-    accent: 0x2f7d8c,
-    beach: 0x28606c
+    ground: [0x6f8492, 0x8098a8, 0x5d707d],
+    accent: 0x4fb3c4,
+    beach: 0x3f8794
   },
   {
     id: 'citadel',
@@ -46,9 +46,9 @@ export const BIOMES: Biome[] = [
     index: '02',
     tagline: '层层塔楼守着最后的灯火。',
     center: dir(-0.72, 0.28, 0.6),
-    ground: [0x69727f, 0x7b8592, 0x5a626e],
-    accent: 0x8a9fb8,
-    beach: 0x4c5664
+    ground: [0x9aa6b4, 0xb2bec9, 0x8b96a3],
+    accent: 0xc0d0e4,
+    beach: 0x7c8896
   },
   {
     id: 'ark',
@@ -57,9 +57,9 @@ export const BIOMES: Biome[] = [
     index: '03',
     tagline: '沉睡的巨舰半埋在大地里。',
     center: dir(0.82, -0.2, -0.5),
-    ground: [0x5b5149, 0x6b5f54, 0x4a423a],
-    accent: 0x8a5a3a,
-    beach: 0x4a4644
+    ground: [0x9b8874, 0xb09c86, 0x86735f],
+    accent: 0xc08a55,
+    beach: 0x87837a
   },
   {
     id: 'fortress',
@@ -68,9 +68,9 @@ export const BIOMES: Biome[] = [
     index: '04',
     tagline: '越靠近，越危险。',
     center: dir(-0.35, -0.55, -0.72),
-    ground: [0x2f2738, 0x3a3046, 0x251f2d],
-    accent: 0x5a2f6e,
-    beach: 0x3a2442
+    ground: [0x5b4d6e, 0x6c5c80, 0x4a3f5b],
+    accent: 0x8f5fab,
+    beach: 0x5d4168
   }
 ];
 
@@ -82,9 +82,9 @@ export const OCEAN: Biome = {
   index: '00',
   tagline: '流动的星球血脉。',
   center: dir(0, -1, 0),
-  ground: [0x0d161c, 0x111d24, 0x0a1217],
-  accent: 0x0a1217,
-  beach: 0x0a1217
+  ground: [0x16222b, 0x1b2a34, 0x121d25],
+  accent: 0x121d25,
+  beach: 0x121d25
 };
 
 const LAND_BIOMES = BIOMES;
@@ -208,9 +208,13 @@ export function nearestCenterAngle(d: THREE.Vector3): number {
 /** Radius of the planet, mirrored here to keep `biomes.ts` free of cycles. */
 const PLANET_RADIUS_LOCAL = 42;
 /** Angular half-width of the dry core of a crossing, in radians. */
-const CROSS_CORE = 1.5 / PLANET_RADIUS_LOCAL;
-/** Angular half-width at which a crossing has faded back into the channel. */
-const CROSS_FADE = 2.7 / PLANET_RADIUS_LOCAL;
+const CROSS_CORE = 3.2;
+/** Surface distance at which a crossing has faded back into the channel. */
+const CROSS_FADE = 5.6;
+/** Extra dry width near each end of a crossing, so leaving a zone cannot put a
+ * walker straight into a channel. Measured in surface units. */
+const CROSS_APRON = 7;
+const APRON_REACH = 18;
 /** Field value a crossing settles at: above zero so it is land, below the 0.06
  * that prop scattering needs, so nothing solid is strewn across the causeway. */
 const CROSS_DRY = 0.05;
@@ -241,17 +245,25 @@ function crossingArcs(): Arc[] {
 }
 
 const _proj = new THREE.Vector3();
+/** Distance from the last `arcDistance` point to the nearer end of its arc. */
+let _endDist = 0;
 
-/** Angular distance from `d` to the closest point of `arc`, given `side`. */
+/** Surface distance from `d` to the closest point of `arc`, given `side`. */
 function arcDistance(arc: Arc, d: THREE.Vector3, side: number): number {
   _proj.copy(d).addScaledVector(arc.n, -d.dot(arc.n));
-  if (_proj.lengthSq() < 1e-10) return arc.len;
+  if (_proj.lengthSq() < 1e-10) {
+    _endDist = (arc.len * PLANET_RADIUS_LOCAL) / 2;
+    return _endDist;
+  }
   _proj.normalize();
+  const da = arc.a.angleTo(d) * PLANET_RADIUS_LOCAL;
+  const db = arc.b.angleTo(d) * PLANET_RADIUS_LOCAL;
+  _endDist = Math.min(da, db);
   // Within the arc's own span both endpoints are inside one arc length of it.
   if (arc.a.dot(_proj) >= arc.cos && arc.b.dot(_proj) >= arc.cos) {
-    return Math.asin(Math.min(1, side));
+    return Math.asin(Math.min(1, side)) * PLANET_RADIUS_LOCAL;
   }
-  return Math.min(arc.a.angleTo(d), arc.b.angleTo(d));
+  return _endDist;
 }
 
 /**
@@ -261,12 +273,18 @@ function arcDistance(arc: Arc, d: THREE.Vector3, side: number): number {
  */
 function crossingAt(d: THREE.Vector3): number {
   let best = 0;
+  const reach = Math.sin((CROSS_FADE + CROSS_APRON) / PLANET_RADIUS_LOCAL);
   for (const arc of crossingArcs()) {
     const side = Math.abs(d.dot(arc.n));
-    if (side > Math.sin(CROSS_FADE)) continue;
+    if (side > reach) continue;
     const dist = arcDistance(arc, d, side);
-    if (dist >= CROSS_FADE) continue;
-    const t = 1 - THREE.MathUtils.smoothstep(dist, CROSS_CORE, CROSS_FADE);
+    // The causeway opens out where it meets a zone, so leaving a zone in the
+    // general direction of another never walks straight into a channel.
+    const apron = CROSS_APRON * (1 - THREE.MathUtils.clamp(_endDist / APRON_REACH, 0, 1));
+    const core = CROSS_CORE + apron;
+    const fade = CROSS_FADE + apron;
+    if (dist >= fade) continue;
+    const t = 1 - THREE.MathUtils.smoothstep(dist, core, fade);
     if (t > best) best = t;
   }
   return best;
@@ -287,13 +305,13 @@ export function channelField(d: THREE.Vector3): number {
   const near = THREE.MathUtils.smoothstep(-angleTo(river, d), -1.0, -0.25);
   const fortress = THREE.MathUtils.smoothstep(-angleTo(LAND_BIOMES[3], d), -0.9, -0.3);
 
-  const bend = fbm3(d.x * 4.5 - 6, d.y * 4.5 + 13, d.z * 4.5 + 4, 2) * 0.05;
-  const n = fbm3(d.x * 1.6 + 11, d.y * 1.6 - 2, d.z * 1.6 + 7, 3) + bend;
-  const width = 0.032 + 0.07 * near - 0.014 * fortress;
+  const bend = fbm3(d.x * 3.6 - 6, d.y * 3.6 + 13, d.z * 3.6 + 4, 2) * 0.035;
+  const n = fbm3(d.x * 1.25 + 11, d.y * 1.25 - 2, d.z * 1.25 + 7, 3) + bend;
+  const width = 0.056 + 0.04 * near - 0.016 * fortress;
   let channel = Math.abs(n) - width;
   if (near > 0.01) {
-    const vein = fbm3(d.x * 3.4 - 17, d.y * 3.4 + 5, d.z * 3.4 + 21, 3);
-    channel = Math.min(channel, Math.abs(vein) - 0.035 * near);
+    const vein = fbm3(d.x * 2.6 - 17, d.y * 2.6 + 5, d.z * 2.6 + 21, 2);
+    channel = Math.min(channel, Math.abs(vein) - 0.03 * near);
   }
 
   let keep = 1;
@@ -308,12 +326,16 @@ export function channelField(d: THREE.Vector3): number {
  * Channel field with the crossings cut through it. Where a great-circle arc
  * between two zone centres passes over a channel, the field is lifted to dry
  * land, so every zone can be driven to from every other.
+ *
+ * The whole corridor is pulled to `CROSS_DRY`, land included, not just the wet
+ * part: that keeps scattered props off the road and lays the road at a constant
+ * rise, so it reads as a causeway instead of a path that wanders through rocks.
  */
 export function oceanField(d: THREE.Vector3): number {
   const field = channelField(d);
   const dry = crossingAt(d);
   if (dry <= 0) return field;
-  return THREE.MathUtils.lerp(field, Math.max(field, CROSS_DRY), dry);
+  return THREE.MathUtils.lerp(field, CROSS_DRY, dry);
 }
 
 

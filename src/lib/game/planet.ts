@@ -217,11 +217,11 @@ export function buildGround(): THREE.Mesh {
     if (f >= 0 && f < 0.26 && biome !== OCEAN) {
       const wall = 1 - Math.min(1, f / 0.26);
       const strata = Math.sin(mid.y * 78 + mid.x * 11) * 0.5 + 0.5;
-      col.lerp(WALL_DARK, wall * 0.7);
-      col.lerp(WALL_LIGHT, wall * strata * 0.22);
+      col.lerp(WALL_DARK, wall * 0.5);
+      col.lerp(WALL_LIGHT, wall * strata * 0.2);
     }
     // Seams sit darker than the plate they divide.
-    if (seam) col.multiplyScalar(0.72);
+    if (seam) col.multiplyScalar(0.82);
     // Faint per-face variation keeps the flat shading from looking like a texture.
     col.multiplyScalar(0.95 + hash3(i, 7, 13) * 0.1);
 
@@ -241,8 +241,13 @@ export function buildGround(): THREE.Mesh {
   const mat = new THREE.MeshStandardMaterial({
     vertexColors: true,
     flatShading: true,
-    roughness: 0.55,
-    metalness: 0.45
+    // Pale metal, not a mirror: at night a high metalness has nothing to reflect
+    // and the ground reads as black.
+    roughness: 0.62,
+    metalness: 0.28,
+    // A floor of self-lit colour, so ground facing away from the moon still
+    // reads as metal plates rather than as a hole in the planet.
+    emissive: 0x0c1219
   });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
