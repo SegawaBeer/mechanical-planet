@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { biomeAt, configureBiomeOcean, isOcean, landBiomeBlend, oceanField, OCEAN, type Biome } from './biomes';
+import { configureBiomeOcean, isOcean, landBiomeBlend, oceanField, OCEAN, type Biome } from './biomes';
 import { deriveSeed, fbm3, seededRng } from './noise';
 import type { PlanetProfile } from './space';
 
@@ -46,10 +46,15 @@ export function surfaceRadius(d: THREE.Vector3): number {
   const swell = fbm3(d.x * 1.9 - 7, d.y * 1.9 + 4, d.z * 1.9 + 9, 3) * 1.4 * reliefScale;
   const roll = fbm3(d.x * 6 + 3, d.y * 6, d.z * 6 - 1, 3) * 0.18 * detailScale;
   const base = 0.6 + swell + roll;
-  // Zone shapes cross-fade near a border so no cliff runs along it.
+  // Zone shapes cross-fade near a border so no cliff runs along it. The band is
+  // as wide as the colour blend, so the two zones meet without a visible seam.
   const blend = landBiomeBlend(d);
   let h = zoneHeight(blend.primary, base, d);
-  if (blend.mix > 0) h = THREE.MathUtils.lerp(h, zoneHeight(blend.secondary, base, d), blend.mix);
+  const margin = blend.margin * PLANET_RADIUS;
+  if (margin < ZONE_FADE) {
+    const w = 0.5 * (1 - THREE.MathUtils.clamp(margin / ZONE_FADE, 0, 1));
+    h = THREE.MathUtils.lerp(h, zoneHeight(blend.secondary, base, d), w);
+  }
   const shaped = h >= 0 ? h : Math.max(-0.2, h * 0.15);
   return PLANET_RADIUS + 0.7 + rise * shaped;
 }
@@ -166,8 +171,6 @@ export function offsetDir(d: THREE.Vector3, east: number, north: number): THREE.
 }
 
 const WALL_DARK = new THREE.Color(0x2a3540);
-/** How close to a zone border a face must be to be part of the border line. */
-const BORDER_BAND = 0.012;
 
 /**
  * Icosphere whose faces share their vertices, so `computeVertexNormals` gives
@@ -244,12 +247,10 @@ const _pal = new THREE.Color();
  * place along the zone's palette and another low-frequency noise lifts or drops
  * the tone. There are no plates, no seams and no per-face noise.
  */
-function groundColor(d: THREE.Vector3, out: THREE.Color): THREE.Color {
-  const biome = biomeAt(d);
-  const f = oceanField(d);
-  if (biome === OCEAN) return out.setHex(OCEAN.ground[0]);
-  if (f < 0.05) return out.setHex(biome.beach);
-  const palette = biome.ground;
+/** Ground colour of one zone at `d`, before any blend with a neighbour. */
+function zoneGround(b: Biome, d: THREE.Vector3, f: number, out: THREE.Color): THREE.Color {
+  if (f < 0.05) return out.setHex(b.beach);
+  const palette = b.ground;
   const n = palette.length;
   // Wide palettes (the ark's five colours) need a tighter noise so separate
   // regions still show; blending them at a broad scale would average every hue
@@ -265,10 +266,31 @@ function groundColor(d: THREE.Vector3, out: THREE.Color): THREE.Color {
   return out;
 }
 
+/** Width, in surface units, over which one zone's ground colour becomes the next. */
+const ZONE_FADE = 5;
+
+/**
+ * Ground colour at one direction. Pure function of position: neighbouring
+ * vertices blend into each other, and across a zone border the two zones'
+ * colours cross-fade over `ZONE_FADE` units, so no boundary line shows.
+ */
+function groundColor(d: THREE.Vector3, out: THREE.Color): THREE.Color {
+  const f = oceanField(d);
+  if (f < 0) return out.setHex(OCEAN.ground[0]);
+  const blend = landBiomeBlend(d);
+  const margin = blend.margin * PLANET_RADIUS;
+  if (margin < ZONE_FADE) {
+    zoneGround(blend.primary, d, f, out);
+    zoneGround(blend.secondary, d, f, _pal);
+    out.lerp(_pal, 0.5 * (1 - THREE.MathUtils.clamp(margin / ZONE_FADE, 0, 1)));
+    return out;
+  }
+  return zoneGround(blend.primary, d, f, out);
+}
+
 export function buildGround(): THREE.Mesh {
   const geo = smoothSphere(6);
   const pos = geo.attributes.position as THREE.BufferAttribute;
-  const index = geo.index as THREE.BufferAttribute;
   const colors = new Float32Array(pos.count * 3);
   const d = new THREE.Vector3();
   const col = new THREE.Color();
@@ -296,43 +318,6 @@ export function buildGround(): THREE.Mesh {
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
   mesh.name = 'ground';
-
-  // A face straddling a zone border is repeated in a second, unlit mesh, so the
-  // border reads as a glowing line rather than as a change of colour.
-  const borderPos: number[] = [];
-  const borderCol: number[] = [];
-  const a = new THREE.Vector3();
-  const b = new THREE.Vector3();
-  const c = new THREE.Vector3();
-  const mid = new THREE.Vector3();
-  const edge = new THREE.Color();
-  for (let i = 0; i < index.count; i += 3) {
-    a.fromBufferAttribute(pos, index.getX(i)).normalize();
-    b.fromBufferAttribute(pos, index.getX(i + 1)).normalize();
-    c.fromBufferAttribute(pos, index.getX(i + 2)).normalize();
-    mid.copy(a).add(b).add(c).normalize();
-    const biome = biomeAt(mid);
-    if (biome === OCEAN) continue;
-    if (landBiomeBlend(mid).margin >= BORDER_BAND) continue;
-    edge.setHex(biome.accent);
-    const verts = [a, b, c];
-    for (const p of verts) {
-      const r = surfaceRadius(p) + 0.16;
-      borderPos.push(p.x * r, p.y * r, p.z * r);
-      borderCol.push(edge.r, edge.g, edge.b);
-    }
-  }
-  if (borderPos.length > 0) {
-    const borderGeo = new THREE.BufferGeometry();
-    borderGeo.setAttribute('position', new THREE.Float32BufferAttribute(borderPos, 3));
-    borderGeo.setAttribute('color', new THREE.Float32BufferAttribute(borderCol, 3));
-    const borderMesh = new THREE.Mesh(
-      borderGeo,
-      new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false, side: THREE.DoubleSide })
-    );
-    borderMesh.name = 'zone-border';
-    mesh.add(borderMesh);
-  }
   return mesh;
 }
 

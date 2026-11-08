@@ -51,6 +51,7 @@ import { Shards } from './shards';
 import { Fireworks } from './fireworks';
 import { Protagonist, type Form } from './robots/protagonist';
 import { TransformBurst } from './robots/burst';
+import { Crowd } from './robots/crowd';
 import type { SchemeId } from './robots/scheme';
 import { equip } from './models';
 import { controlState } from './ui/control';
@@ -271,6 +272,8 @@ export class Game {
   private readonly ndc = new THREE.Vector2();
   /** Shared state object for machines standing idle. */
   private idleState = { speed: 0, speed01: 0, airborne: false, steer: 0, time: 0 };
+  /** Patrolling and duelling machines that fill the zones; never controllable. */
+  private crowd: Crowd;
   /** Smoothed up axis of whatever is being driven; see `placeRig`. */
   private rigUp = new THREE.Vector3(0, 1, 0);
   private rigUpReady = false;
@@ -515,6 +518,11 @@ export class Game {
     spawn(buildRobotDeer(), 'robot deer', 'river', 6, 3, 6, 1.8, 1);
     spawn(buildRobotDeer(), 'robot deer', 'river', -5, -4, 6, 1.7, 2);
     spawn(buildRobotDeer(), 'robot deer', 'citadel', 7, -5, 6, 1.6, 3);
+    spawn(buildRobotDeer(), 'robot deer', 'river', 9, -8, 6, 1.7, 4);
+    spawn(buildRobotDeer(), 'robot deer', 'citadel', -9, 6, 6, 1.5, 5);
+    spawn(buildRobotDeer(), 'robot deer', 'ark', 3, 7, 6, 1.6, 6);
+    spawn(buildRobotDeer(), 'robot deer', 'ark', -6, -6, 6, 1.7, 7);
+    spawn(buildRobotDeer(), 'robot deer', 'fortress', 7, 4, 6, 1.5, 8);
 
     this.skyline = new Skyline(seed);
     this.scene.add(this.clouds.group, this.skyline.group, this.weather.group, this.hearts.group);
@@ -554,7 +562,8 @@ export class Game {
       crew.rig.hit.castShadow = false;
       this.scene.add(crew.rig.root);
     }
-    this.scene.add(this.burst.group);
+    this.crowd = new Crowd(this.colliders);
+    this.scene.add(this.crowd.group, this.burst.group);
     this.rigUpReady = false;
     this.placePlayer();
     this.publishControl();
@@ -1359,6 +1368,7 @@ export class Game {
   private updateWorld(dt: number): void {
     const t = this.time;
     this.applyAtmosphere(dt);
+    this.crowd.update(dt, t);
     this.planets.update(dt, t);
 
     // Swell on the energy channels.
