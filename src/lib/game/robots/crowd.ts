@@ -8,7 +8,7 @@ import { buildRobot, type FormAnim, type FormState } from './robot';
 import { SCHEMES } from './scheme';
 import { biomeById, isOcean } from '../biomes';
 import { offsetDir, surfaceNormal, walkRadius } from '../planet';
-import type { ColliderGrid } from '../collision';
+import { nearBridge, type ColliderGrid } from '../collision';
 
 type ZoneId = 'river' | 'citadel' | 'ark' | 'fortress';
 const ZONES: ZoneId[] = ['river', 'citadel', 'ark', 'fortress'];
@@ -30,6 +30,15 @@ const PATROL: [number, number][] = [
   [7, 9],
   [10, -3]
 ];
+/** The river zone is an island ringed by sea, so its walkers stay in tight. */
+const PATROL_RIVER: [number, number][] = [
+  [-6, 3],
+  [-3, -7],
+  [5, 5],
+  [6, -2]
+];
+/** How close the driven machine can come before a patrol stops walking. */
+const YIELD = 2.6;
 
 type Actor = {
   zone: ZoneId;
@@ -89,6 +98,14 @@ function stepToward(dir: THREE.Vector3, heading: THREE.Vector3, dist: number, ou
   return out.copy(dir).multiplyScalar(Math.cos(ang)).addScaledVector(heading, Math.sin(ang)).normalize();
 }
 
+/** Nearest dry point to the given offset: steps back toward the centre until
+ * it leaves the water. */
+function landNear(centre: THREE.Vector3, east: number, north: number): THREE.Vector3 {
+  const point = offsetDir(centre.clone(), east, north);
+  for (let i = 0; i < 14 && (isOcean(point) || nearBridge(point)); i++) offsetDir(point, -east * 0.14, -north * 0.14);
+  return point;
+}
+
 export class Crowd {
   readonly group = new THREE.Group();
   private actors: Actor[] = [];
@@ -117,16 +134,17 @@ export class Crowd {
 
     for (const zone of ZONES) {
       const centre = biomeById(zone).center;
+      const ring = zone === 'river' ? PATROL_RIVER : PATROL;
 
       // Two walkers on a loop of four points.
-      const startA = offsetDir(centre.clone(), PATROL[0][0], PATROL[0][1]);
-      const startB = offsetDir(centre.clone(), PATROL[2][0], PATROL[2][1]);
+      const startA = landNear(centre, ring[0][0], ring[0][1]);
+      const startB = landNear(centre, ring[2][0], ring[2][1]);
       this.addActor(zone, startA, 1, null);
       this.addActor(zone, startB, 3, null);
 
       // One duelling pair, three units apart, facing each other.
-      const a = offsetDir(centre.clone(), -6, 5.5);
-      const b = offsetDir(centre.clone(), -6, 5.5 - DUEL_GAP);
+      const a = landNear(centre, -6, 5.5);
+      const b = landNear(centre, -6, 5.5 - DUEL_GAP);
       const actorA = this.addActor(zone, a, 0, null);
       const actorB = this.addActor(zone, b, 0, null);
       actorA.kind = 'duel';
@@ -141,11 +159,16 @@ export class Crowd {
     for (let i = 0; i < 12; i++) this.flashes.push(this.makeFlash());
   }
 
-  update(dt: number, t: number): void {
+  /** Every crowd machine's position, for the driven machine to collide with. */
+  positions(): THREE.Vector3[] {
+    return this.actors.map((a) => a.dir);
+  }
+
+  update(dt: number, t: number, avoid: THREE.Vector3 | null = null): void {
     this.idle.time = t;
     this.walk.time = t;
     for (const actor of this.actors) {
-      if (actor.kind === 'patrol') this.patrol(actor, dt);
+      if (actor.kind === 'patrol') this.patrol(actor, dt, avoid);
       else this.duel(actor, dt);
     }
     this.updateBolts(dt);
@@ -191,7 +214,17 @@ export class Crowd {
     return actor;
   }
 
-  private patrol(actor: Actor, dt: number): void {
+  private patrol(actor: Actor, dt: number, avoid: THREE.Vector3 | null): void {
+    // A walker gives way to the machine being driven rather than shoving it.
+    if (avoid && actor.dir.angleTo(avoid) * 42 < YIELD) {
+      place(actor.holder, actor.dir, actor.heading);
+      actor.anim(dt, this.idle);
+      return;
+    }
+    // A walker that has drifted onto a crossing heads straight back inland.
+    if (nearBridge(actor.dir)) {
+      actor.target.copy(biomeById(actor.zone).center);
+    }
     headingToward(actor.dir, actor.target, actor.heading);
     const left = actor.dir.angleTo(actor.target) * 42;
     if (left < 0.35) {
@@ -214,10 +247,11 @@ export class Crowd {
   /** Choose the next loop point, skipping any that water or a prop blocks. */
   private pickWaypoint(actor: Actor): void {
     const centre = biomeById(actor.zone).center;
-    for (let i = 0; i < PATROL.length; i++) {
-      actor.next = (actor.next + 1) % PATROL.length;
-      const point = offsetDir(centre.clone(), PATROL[actor.next][0], PATROL[actor.next][1]);
-      if (isOcean(point)) continue;
+    const ring = actor.zone === 'river' ? PATROL_RIVER : PATROL;
+    for (let i = 0; i < ring.length; i++) {
+      actor.next = (actor.next + 1) % ring.length;
+      const point = offsetDir(centre.clone(), ring[actor.next][0], ring[actor.next][1]);
+      if (isOcean(point) || nearBridge(point)) continue;
       this.colliders.resolve(point, 0.6);
       actor.target.copy(point);
       return;

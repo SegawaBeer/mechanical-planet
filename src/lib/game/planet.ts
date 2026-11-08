@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { configureBiomeOcean, isOcean, landBiomeBlend, oceanField, OCEAN, type Biome } from './biomes';
+import { bridgeHeight, configureBiomeOcean, isOcean, landBiomeBlend, nearSeaRoute, oceanField, OCEAN, type Biome } from './biomes';
 import { deriveSeed, fbm3, seededRng } from './noise';
 import type { PlanetProfile } from './space';
 
@@ -37,12 +37,12 @@ export function surfaceRadius(d: THREE.Vector3): number {
   const reliefScale = terrainReliefScale;
   const detailScale = terrainDetailScale;
   if (f < 0) {
-    // Channel bed: drops away from the bank so the flow reads as deep.
-    const depth = Math.min(1, -f * 14);
+    // Bed: drops away from the shore so the water reads as deep. `f` is the
+    // distance to the shore in surface units.
+    const depth = Math.min(1, -f * 0.6);
     return PLANET_RADIUS - 0.35 - depth * 1.3;
   }
-  // Canyon walls: a short steep rise out of the channel, then the open ground.
-  const rise = Math.min(1, f * 9);
+  const rise = Math.min(1, f * 0.5);
   const swell = fbm3(d.x * 1.9 - 7, d.y * 1.9 + 4, d.z * 1.9 + 9, 3) * 1.4 * reliefScale;
   const roll = fbm3(d.x * 6 + 3, d.y * 6, d.z * 6 - 1, 3) * 0.18 * detailScale;
   const base = 0.6 + swell + roll;
@@ -56,7 +56,53 @@ export function surfaceRadius(d: THREE.Vector3): number {
     h = THREE.MathUtils.lerp(h, zoneHeight(blend.secondary, base, d), w);
   }
   const shaped = h >= 0 ? h : Math.max(-0.2, h * 0.15);
-  return PLANET_RADIUS + 0.7 + rise * shaped;
+  const land = PLANET_RADIUS + 0.7 + rise * shaped + borderRelief(blend, margin, d);
+  // The coast: mostly beach, with a cliff on part of the sea shore.
+  const coast = fbm3(d.x * 5.5 + 17, d.y * 5.5 - 3, d.z * 5.5 + 9, 2);
+  const width = 3.1 + coast * 1.1;
+  // Cliffs belong to the land side of the coast; the island keeps its beaches so
+  // the bridge heads can land on sand.
+  const seaCoast = blend.primary.id !== 'river' && blend.secondary.id === 'river';
+  const cliff = seaCoast && fbm3(d.x * 2.9 - 21, d.y * 2.9 + 11, d.z * 2.9 - 6, 2) > 0.4 && !nearSeaRoute(d);
+  if (cliff) {
+    const lip = THREE.MathUtils.smoothstep(f, 0, 0.8 + Math.abs(coast) * 0.6);
+    return THREE.MathUtils.lerp(SEA_LEVEL - 0.2, land + 2.3, lip);
+  }
+  const beach = THREE.MathUtils.smoothstep(f, 0, width);
+  return THREE.MathUtils.lerp(SEA_LEVEL - 0.12, land, beach);
+}
+
+/** Sand at the waterline. */
+const SAND = new THREE.Color(0xe8d3a0);
+/** Scree between the fortress and the citadel. */
+const SCREE = new THREE.Color(0x6b5f52);
+
+/**
+ * Landforms along a zone border: a cliff between the citadel and the ark and
+ * between the ark and the fortress, with ramps where the noise dips so the two
+ * zones can still be crossed on foot; broken scree between the fortress and the
+ * citadel.
+ */
+function borderRelief(blend: { primary: Biome; secondary: Biome }, margin: number, d: THREE.Vector3): number {
+  if (margin > 8) return 0;
+  const a = blend.primary.id;
+  const b = blend.secondary.id;
+  const cliffPair = (a === 'citadel' || b === 'citadel') && (a === 'ark' || b === 'ark')
+    || (a === 'ark' || b === 'ark') && (a === 'fortress' || b === 'fortress');
+  if (cliffPair) {
+    // The citadel stands above the ark, the ark above the fortress.
+    const highId = a === 'citadel' || b === 'citadel' ? 'citadel' : 'ark';
+    const onHigh = blend.primary.id === highId;
+    // A jagged lip, and ramps where the noise dips so the cliff can be walked.
+    const jitter = fbm3(d.x * 20, d.y * 20, d.z * 20, 2) * 0.9;
+    const reach = THREE.MathUtils.smoothstep(margin + jitter, 1.0, 2.8);
+    const ramp = THREE.MathUtils.smoothstep(Math.abs(fbm3(d.x * 2.6 + 31, d.y * 2.6 - 7, d.z * 2.6 + 13, 2)), 0.12, 0.36);
+    return onHigh ? 2.3 * ramp * reach : 0;
+  }
+  if ((a === 'citadel' && b === 'fortress') || (a === 'fortress' && b === 'citadel')) {
+    return fbm3(d.x * 9, d.y * 9 + 5, d.z * 9 - 3, 2) * 0.45;
+  }
+  return 0;
 }
 
 /** How one zone shapes the basic swell-and-roll ground. */
@@ -102,6 +148,10 @@ export function surfaceNormal(d: THREE.Vector3, out = new THREE.Vector3()): THRE
 const FOOT_SAMPLES = 0.5;
 const _foot = new THREE.Vector3();
 export function walkRadius(d: THREE.Vector3): number {
+  const deck = bridgeHeight(d);
+  // Where the deck runs into rising ground the ground wins, so a walker is never
+  // left standing inside the hillside.
+  if (deck !== null) return Math.max(deck, surfaceRadius(d) + 0.03);
   let r = surfaceRadius(d);
   for (let i = 0; i < 4; i++) {
     const east = i === 0 ? FOOT_SAMPLES : i === 1 ? -FOOT_SAMPLES : 0;
@@ -262,7 +312,8 @@ function zoneGround(b: Biome, d: THREE.Vector3, f: number, out: THREE.Color): TH
   out.setHex(palette[i0]).lerp(_pal.setHex(palette[i1]), t - i0);
   const shade = 1 + THREE.MathUtils.clamp(fbm3(d.x * 3.3 - 4, d.y * 3.3 + 8, d.z * 3.3 - 6, 2), -1, 1) * 0.12;
   out.multiplyScalar(shade);
-  if (f < 0.3) out.lerp(WALL_DARK, (1 - f / 0.3) * 0.35);
+  // Sand at the waterline, fading into the land over a few units.
+  if (f < 4) out.lerp(SAND, (1 - THREE.MathUtils.smoothstep(f, 0.2, 3.8)) * 0.92);
   return out;
 }
 
@@ -279,13 +330,21 @@ function groundColor(d: THREE.Vector3, out: THREE.Color): THREE.Color {
   if (f < 0) return out.setHex(OCEAN.ground[0]);
   const blend = landBiomeBlend(d);
   const margin = blend.margin * PLANET_RADIUS;
+  let colour: THREE.Color;
   if (margin < ZONE_FADE) {
     zoneGround(blend.primary, d, f, out);
     zoneGround(blend.secondary, d, f, _pal);
-    out.lerp(_pal, 0.5 * (1 - THREE.MathUtils.clamp(margin / ZONE_FADE, 0, 1)));
-    return out;
+    colour = out.lerp(_pal, 0.5 * (1 - THREE.MathUtils.clamp(margin / ZONE_FADE, 0, 1)));
+  } else {
+    colour = zoneGround(blend.primary, d, f, out);
   }
-  return zoneGround(blend.primary, d, f, out);
+  // Broken scree along the fortress-citadel border: a mottled grey-brown.
+  const ids = `${blend.primary.id}-${blend.secondary.id}`;
+  if ((ids === 'citadel-fortress' || ids === 'fortress-citadel') && margin < 9 && f > 2) {
+    const mottle = fbm3(d.x * 7.5 + 13, d.y * 7.5 - 5, d.z * 7.5 + 3, 2) * 0.5 + 0.5;
+    colour.lerp(SCREE, (1 - margin / 9) * (0.35 + 0.5 * mottle));
+  }
+  return colour;
 }
 
 export function buildGround(): THREE.Mesh {

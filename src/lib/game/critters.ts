@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { PLANET_RADIUS, isOcean, tangentBasis, walkRadius } from './planet';
 import type { AnimalData, Gait } from './character';
-import type { ColliderGrid } from './collision';
+import { nearBridge, type ColliderGrid } from './collision';
 
 /** Footprint radius of a critter, in surface units. */
 const CRITTER_RADIUS = 0.5;
@@ -166,6 +166,11 @@ export class Critter {
         return;
       }
     }
+    if (nearBridge(this.dir)) {
+      // Standing on a crossing or its ends blocks the player: head inland.
+      this.target = this.home.clone();
+      this.wait = 0;
+    }
     if (this.wait > 0) {
       this.wait -= dt;
       this.idle(time);
@@ -177,7 +182,7 @@ export class Critter {
         tangentBasis(this.home, Math.random() * Math.PI * 2, _right, _fwd);
         const dist = Math.random() * this.roam;
         const t = this.home.clone().multiplyScalar(Math.cos(dist / PLANET_RADIUS)).addScaledVector(_fwd, Math.sin(dist / PLANET_RADIUS)).normalize();
-        if (!isOcean(t) && !this.colliders?.blocked(t, CRITTER_RADIUS)) {
+        if (!isOcean(t) && !nearBridge(t) && !this.colliders?.blocked(t, CRITTER_RADIUS)) {
           this.target = t;
           break;
         }

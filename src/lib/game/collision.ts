@@ -4,6 +4,7 @@
 
 import * as THREE from 'three';
 import { PLANET_RADIUS } from './planet';
+import { BRIDGES, bridgeHeight } from './biomes';
 
 /** A solid disc on the surface: unit direction plus radius in surface units. */
 export type Collider = { dir: THREE.Vector3; radius: number };
@@ -11,7 +12,7 @@ export type Collider = { dir: THREE.Vector3; radius: number };
 /** Side of one grid cube in unit-sphere space, about 4 surface units. */
 const CELL = 0.1;
 /** Largest agent radius that can query the grid, in surface units. */
-const MAX_AGENT_RADIUS = 0.8;
+const MAX_AGENT_RADIUS = 1.2;
 const PASSES = 3;
 
 const _t = new THREE.Vector3();
@@ -103,4 +104,26 @@ export class ColliderGrid {
     }
     return changed;
   }
+}
+
+/** Every deck, plus this much dry ground beyond each of its ends, is off limits
+ * to the animals and the crowd: they kept blocking the bridgeheads. */
+const BRIDGE_MARGIN = 4;
+
+/**
+ * True on a bridge deck, or within `margin` surface units of either end of
+ * one. Scenery that wanders uses this to stay off the crossings.
+ */
+export function nearBridge(d: THREE.Vector3, margin = BRIDGE_MARGIN): boolean {
+  if (bridgeHeight(d) !== null) return true;
+  for (const bridge of BRIDGES) {
+    const points = bridge.points;
+    if (points.length < 2) continue;
+    const reach = margin + bridge.halfWidth;
+    for (let i = 0; i < 2; i++) {
+      const end = i === 0 ? points[0] : points[points.length - 1];
+      if (d.angleTo(end) * PLANET_RADIUS <= reach) return true;
+    }
+  }
+  return false;
 }

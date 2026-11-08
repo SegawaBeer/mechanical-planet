@@ -262,7 +262,7 @@ function gate(c: Ctx, api: ZoneApi, bearing: number, dist: number): void {
     emit(c, f, WARM, 24, 11, [sx * pil, 2.4, 0.9]);
   }
   // Glowing sill on the ground line between the pylons.
-  part(c.solid, G.box, IRON, f, { p: [0, -0.2, 0], s: [pil * 2 + 1.2, 0.55, 2.2] });
+  part(c.solid, G.box, IRON, f, { p: [0, -0.2, 0], s: [pil * 2 + 1.2, 0.42, 2.2] });
   part(c.glow, G.box, WARM, f, { p: [0, 0.33, 0], s: [pil * 2 - 1.1, 0.05, 1.5] });
   // Arch: boxes laid along a half-ellipse across the opening.
   const steps = 7;
@@ -316,7 +316,7 @@ function plaza(c: Ctx, f: THREE.Matrix4, rad: number): void {
       const a = ((arc + k * 17) * Math.PI) / 180;
       part(c.solid, G.box, TRIM, f, {
         p: [Math.sin(a) * rad * 0.93, 0, Math.cos(a) * rad * 0.93],
-        s: [rad * 0.58, 0.46, 0.5],
+        s: [rad * 0.58, 0.28, 0.5],
         r: [0, a, 0]
       });
     }
@@ -510,7 +510,7 @@ export const citadelZone: ZoneModule = {
     plaza(c, api.at(0, 0, gateBearing), 4.6);
     for (const spec of specs) {
       const p = atBearing(api, spec.bearing, spec.dist - spec.w * 0.95, 0);
-      part(c.solid, G.box, STEEL_D, p, { p: [0, -0.35, 0], s: [spec.w * 0.9, 0.8, spec.w * 0.5] });
+      part(c.solid, G.box, STEEL_D, p, { p: [0, -0.35, 0], s: [spec.w * 0.9, 0.6, spec.w * 0.5] });
       part(c.solid, G.box, TRIM, p, { p: [0, 0.3, 0], s: [spec.w * 0.95, 0.14, spec.w * 0.56] });
     }
 

@@ -9,6 +9,7 @@ import { PLANET_RADIUS, offsetDir, surfaceFrame } from './planet';
 import type { Collider } from './collision';
 import type { Emitter } from './lights';
 import { PropBatch, type Ctx } from './kit';
+import { autoCollide, type KeepFree } from './autoCollide';
 import { WONDERS, wonderDir } from './wonders';
 import type { ZoneApi, ZoneId, ZoneModule } from './zones/types';
 import { riverZone } from './zones/river';
@@ -73,8 +74,13 @@ export function buildWorldProps(seed: number): WorldProps {
     exclusions.push({ dir: d, radius: 2.4 });
   }
 
+  // Places the automatic collision pass must leave walkable: each beacon, each
+  // robot's stand spot, and the player's spawn in the river zone.
+  const keepFree: KeepFree[] = [];
   for (const zone of Object.values(ZONES)) {
     const center = biomeById(zone.id).center;
+    keepFree.push({ dir: center.clone(), radius: 3 });
+    keepFree.push({ dir: offsetDir(center.clone(), 4, -4), radius: 1.5 });
     const api: ZoneApi = {
       ctx,
       at: (east, north, yaw, lift = 0) => surfaceFrame(offsetDir(center.clone(), east, north), yaw, new THREE.Matrix4(), lift),
@@ -112,6 +118,17 @@ export function buildWorldProps(seed: number): WorldProps {
   const solid = ctx.solid.build(new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.55, metalness: 0.15 }));
   const glow = ctx.glow.build(new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false }));
   const night = ctx.night.build(new THREE.MeshBasicMaterial({ vertexColors: true }));
+
+  if (solid) {
+    // Hand-placed footprints miss some props; read the baked geometry back and
+    // fill in whatever still stands in the player's way.
+    keepFree.push({ dir: offsetDir(biomeById('river').center.clone(), 1.4, -3.6), radius: 1.5 });
+    const started = performance.now();
+    const added = autoCollide(solid.geometry, ctx.colliders, keepFree);
+    console.log(
+      `[autoCollide] added ${added} colliders, ${ctx.colliders.length} total (${Math.round(performance.now() - started)} ms)`
+    );
+  }
   if (solid) {
     solid.castShadow = true;
     solid.receiveShadow = true;

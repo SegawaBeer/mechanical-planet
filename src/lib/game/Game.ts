@@ -144,9 +144,16 @@ const HOP_VELOCITY = 7.5;
 const INTERACT_RANGE = 3.6;
 /** How close the player has to be to pet an animal, in surface units. */
 const PET_RANGE = 2.8;
-/** Radius of the machine's footprint, in surface units. */
-const PLAYER_RADIUS = 0.38;
-const VEHICLE_RADIUS = 0.55;
+/** Collision radii, in surface units, matched to the models rather than to the
+ * old blocky explorer: the humanoid is about 1.4 wide at the shoulders and the
+ * vehicle about 1.2 wide and 2.4 long. */
+const PLAYER_RADIUS = 0.7;
+const VEHICLE_RADIUS = 0.6;
+/** How far the nose and tail sample sits from the vehicle's centre. */
+const VEHICLE_HALF = 0.8;
+/** Push-out radius for other machines and animals sharing the ground. */
+const ACTOR_RADIUS = 0.8;
+const ANIMAL_RADIUS = 0.6;
 /** Length of the transform effect, in seconds; the model swaps halfway. */
 const TRANSFORM_TIME = 1;
 /** Nose-to-tail length of the vehicle form, for sampling the ground under it. */
@@ -507,6 +514,9 @@ export class Game {
       seed: number
     ) => {
       const home = offsetDir(biomeById(biome).center.clone(), e, n);
+      // The river zone is mostly sea now; step an animal back toward its zone
+      // centre until it is standing on the island.
+      for (let i = 0; i < 10 && isOcean(home); i++) offsetDir(home, -e * 0.14, -n * 0.14);
       const c = new Critter(model, `${name.replace(' ', '-')}-${seed}`, name, home, roam, speed, seed, this.colliders);
       c.group.traverse((o) => {
         if (o instanceof THREE.Mesh) o.castShadow = true;
@@ -976,6 +986,14 @@ export class Game {
     }
 
     this.updateDrive(dt);
+    if (!this.flying && !this.globe && this.pushOutOfActors(this.dir)) {
+      // Being shoved off a walker or an animal kills the momentum.
+      this.moveSpeed *= 0.5;
+      // Being shoved must not shove us into a wall: settle the body again.
+      this.resolveBody(this.dir, this.heading, this.player.form === 'vehicle');
+      this.heading.addScaledVector(this.dir, -this.heading.dot(this.dir)).normalize();
+      this.camForward.addScaledVector(this.dir, -this.camForward.dot(this.dir)).normalize();
+    }
 
     if (this.transformTime > 0) {
       this.transformTime = Math.max(0, this.transformTime - dt);
@@ -1053,8 +1071,13 @@ export class Game {
         turnRate = ROBOT_TURN;
       }
       _q.setFromAxisAngle(up, mx * turnRate * dt);
-      this.heading.applyQuaternion(_q);
-      this.heading.addScaledVector(up, -this.heading.dot(up)).normalize();
+      _v3.copy(this.heading).applyQuaternion(_q);
+      _v3.addScaledVector(up, -_v3.dot(up)).normalize();
+      // A long vehicle cannot spin its nose or tail into a wall: the turn is
+      // refused rather than letting the body clip through.
+      if (!vehicle || !this.bodyBlocked(up, _v3)) {
+        this.heading.copy(_v3);
+      }
     }
 
     if (Math.abs(this.moveSpeed) > 0.01 && !this.globe) {
@@ -1065,7 +1088,7 @@ export class Game {
         this.moveSpeed *= vehicle ? 0.4 : 0.15;
         if (Math.abs(this.moveSpeed) < 0.15) this.moveSpeed = 0;
       } else {
-        this.colliders.resolve(_v2, vehicle ? VEHICLE_RADIUS : PLAYER_RADIUS);
+        this.resolveBody(_v2, this.heading, vehicle);
         up.copy(_v2);
         this.heading.addScaledVector(up, -this.heading.dot(up)).normalize();
         this.camForward.addScaledVector(up, -this.camForward.dot(up)).normalize();
@@ -1224,6 +1247,65 @@ export class Game {
     root.position.copy(dir).multiplyScalar(radius + lift);
   }
 
+  /**
+   * Push the machine's body out of the props. A humanoid is close to a disc; a
+   * vehicle is two and a half times longer than it is wide, so the nose and
+   * tail each get their own disc and their correction is applied to the centre.
+   */
+  private resolveBody(dir: THREE.Vector3, heading: THREE.Vector3, vehicle: boolean): void {
+    this.colliders.resolve(dir, vehicle ? VEHICLE_RADIUS : PLAYER_RADIUS);
+    if (!vehicle) return;
+    const ang = VEHICLE_HALF / PLANET_RADIUS;
+    for (let i = 0; i < 2; i++) {
+      const sign = i === 0 ? 1 : -1;
+      _v2.copy(dir).multiplyScalar(Math.cos(ang)).addScaledVector(heading, sign * Math.sin(ang)).normalize();
+      _v1.copy(_v2);
+      if (!this.colliders.resolve(_v2, VEHICLE_RADIUS)) continue;
+      _v1.subVectors(_v2, _v1);
+      dir.add(_v1).normalize();
+      this.colliders.resolve(dir, VEHICLE_RADIUS);
+    }
+  }
+
+  /** True when the nose or tail disc would sit inside a prop at this heading. */
+  private bodyBlocked(dir: THREE.Vector3, heading: THREE.Vector3): boolean {
+    const ang = VEHICLE_HALF / PLANET_RADIUS;
+    for (let i = 0; i < 2; i++) {
+      const sign = i === 0 ? 1 : -1;
+      _v2.copy(dir).multiplyScalar(Math.cos(ang)).addScaledVector(heading, sign * Math.sin(ang)).normalize();
+      if (this.colliders.blocked(_v2, VEHICLE_RADIUS)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Keep the driven machine out of the other machines and the animals. Only
+   * the driven side is moved: everything else stands its ground.
+   */
+  private pushOutOfActors(dir: THREE.Vector3): boolean {
+    let moved = false;
+    const test = (other: THREE.Vector3, radius: number): void => {
+      const cos = THREE.MathUtils.clamp(dir.dot(other), -1, 1);
+      _v2.copy(dir).addScaledVector(other, -cos);
+      const sin = _v2.length();
+      const ang = Math.atan2(sin, cos);
+      const minAng = radius / PLANET_RADIUS;
+      if (ang >= minAng) return;
+      if (sin < 1e-8) _v2.set(0, 1, 0).cross(other).normalize();
+      else _v2.normalize();
+      const push = minAng - ang + 1e-5;
+      dir.multiplyScalar(Math.cos(push)).addScaledVector(_v2, Math.sin(push)).normalize();
+      moved = true;
+    };
+    for (const crew of this.crews) {
+      if (crew.rig === this.player) continue;
+      test(crew.dir, ACTOR_RADIUS + PLAYER_RADIUS);
+    }
+    for (const critter of this.critters) test(critter.dir, ANIMAL_RADIUS + PLAYER_RADIUS);
+    for (const other of this.crowd.positions()) test(other, ACTOR_RADIUS + PLAYER_RADIUS);
+    return moved;
+  }
+
   // ---------------------------------------------------------------- take-over
 
   /**
@@ -1368,7 +1450,7 @@ export class Game {
   private updateWorld(dt: number): void {
     const t = this.time;
     this.applyAtmosphere(dt);
-    this.crowd.update(dt, t);
+    this.crowd.update(dt, t, this.globe || this.flying ? null : this.dir);
     this.planets.update(dt, t);
 
     // Swell on the energy channels.

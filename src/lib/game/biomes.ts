@@ -160,7 +160,9 @@ export function layoutBiomes(seed: number): void {
       c.addScaledVector(force, 0.02).normalize();
     }
   }
-  arcs = null;
+  // The sea, the rivers and the zone sizes all move with the centres.
+  riversReady = false;
+  RIVERS.length = 0;
 }
 
 function angleTo(b: Biome, d: THREE.Vector3): number {
@@ -174,19 +176,50 @@ const _blend: { primary: Biome; secondary: Biome; mix: number; margin: number } 
   margin: 1
 };
 
+const _warp = new THREE.Vector3();
+
+/**
+ * Nudge the direction sideways before it is compared against the zone centres.
+ *
+ * The warp has to move `d`, not the scores: one noise value added to every score
+ * cancels out when the scores are compared, which leaves the borders as the plain
+ * great circles between centres. Two octaves give the border a broad sway of a
+ * few units plus a fine sawtooth.
+ */
+function warpDir(d: THREE.Vector3, out: THREE.Vector3): THREE.Vector3 {
+  // Held still near a zone heart, so no landmark is ever warped into a neighbour.
+  let nearest = Math.PI;
+  for (const b of LAND_BIOMES) nearest = Math.min(nearest, angleTo(b, d));
+  const fade = THREE.MathUtils.smoothstep(nearest * PLANET_RADIUS_LOCAL, 16, 26);
+  if (fade <= 0) return out.copy(d);
+  const amp = fade / PLANET_RADIUS_LOCAL;
+  const coarse = 5.5 * amp;
+  const fine = 1.6 * amp;
+  out.copy(d);
+  out.x += fbm3(d.x * 2.2 + 11, d.y * 2.2 + 5, d.z * 2.2 - 7, 2) * coarse;
+  out.y += fbm3(d.x * 2.2 - 9, d.y * 2.2 + 13, d.z * 2.2 + 3, 2) * coarse;
+  out.z += fbm3(d.x * 2.2 + 7, d.y * 2.2 - 11, d.z * 2.2 + 9, 2) * coarse;
+  out.x += fbm3(d.x * 7.5 - 3, d.y * 7.5 + 9, d.z * 7.5 - 5, 2) * fine;
+  out.y += fbm3(d.x * 7.5 + 6, d.y * 7.5 - 4, d.z * 7.5 + 12, 2) * fine;
+  out.z += fbm3(d.x * 7.5 - 14, d.y * 7.5 + 2, d.z * 7.5 + 6, 2) * fine;
+  out.addScaledVector(d, -out.dot(d));
+  if (out.lengthSq() < 1e-8) return out.copy(d);
+  return out.normalize();
+}
+
 /**
  * The two zones nearest `d`, how much the ground should favour the second, and
- * how far `d` is from the border. The blend band is one surface unit wide, so a
- * zone change reads as a boundary rather than as a smear.
+ * how far `d` is from the border. Distances are measured against the warped
+ * direction, so the border, the heights, the colours and the water all agree.
  */
 export function landBiomeBlend(d: THREE.Vector3): { primary: Biome; secondary: Biome; mix: number; margin: number } {
-  const warp = fbm3(d.x * 2.3 + 5, d.y * 2.3, d.z * 2.3 - 3, 3) * 0.22;
+  const w = warpDir(d, _warp);
   let primary = LAND_BIOMES[0];
   let bestScore = Infinity;
   let secondary = LAND_BIOMES[1];
   let secondScore = Infinity;
   for (const b of LAND_BIOMES) {
-    const score = angleTo(b, d) + warp;
+    const score = angleTo(b, w);
     if (score < bestScore) {
       secondScore = bestScore;
       secondary = primary;
@@ -218,139 +251,432 @@ export function nearestCenterAngle(d: THREE.Vector3): number {
 
 /** Radius of the planet, mirrored here to keep `biomes.ts` free of cycles. */
 const PLANET_RADIUS_LOCAL = 42;
-/** Angular half-width of the dry core of a crossing, in radians. */
-const CROSS_CORE = 3.2;
-/** Surface distance at which a crossing has faded back into the channel. */
-const CROSS_FADE = 5.6;
-/** Extra dry width near each end of a crossing, so leaving a zone cannot put a
- * walker straight into a channel. Measured in surface units. */
-const CROSS_APRON = 7;
-const APRON_REACH = 18;
-/** Field value a crossing settles at: above zero so it is land, below the 0.06
- * that prop scattering needs, so nothing solid is strewn across the causeway. */
-const CROSS_DRY = 0.05;
+/** Index of the zone that is all sea. */
+const SEA_ZONE = 0;
+/** Radius of the island in the middle of the sea, in surface units. */
+const ISLAND_BASE = 11.5;
+const ISLAND_WOBBLE = 1.5;
 
-type Arc = { a: THREE.Vector3; b: THREE.Vector3; n: THREE.Vector3; cos: number; len: number };
+/** One river: a centre line with a half width at every sample. */
+export type RiverLine = {
+  points: THREE.Vector3[];
+  half: number[];
+  center: THREE.Vector3;
+  cos: number;
+  /** The two land zones whose border this river follows. */
+  pair: [number, number];
+};
 
-let arcs: Arc[] | null = null;
+export const RIVERS: RiverLine[] = [];
+
+const _v = new THREE.Vector3();
+const _w = new THREE.Vector3();
+
+/** Direction at fraction `t` along the great circle from `a` to `b`. */
+export function arcDir(a: THREE.Vector3, b: THREE.Vector3, t: number, out: THREE.Vector3): THREE.Vector3 {
+  const len = a.angleTo(b);
+  if (len < 1e-5) return out.copy(a);
+  const s1 = Math.sin((1 - t) * len) / Math.sin(len);
+  const s2 = Math.sin(t * len) / Math.sin(len);
+  return out.copy(a).multiplyScalar(s1).addScaledVector(b, s2).normalize();
+}
+
+/** Radius of the island, in surface units, wobbling between 10 and 13. */
+function islandRadius(d: THREE.Vector3): number {
+  return ISLAND_BASE + fbm3(d.x * 3.1 + 4, d.y * 3.1 - 7, d.z * 3.1 + 2, 2) * ISLAND_WOBBLE;
+}
+
+/** The two zones nearest `d`, by plain angular Voronoi. */
+function nearestPair(d: THREE.Vector3): [number, number] {
+  let i0 = 0, i1 = 1, a0 = Infinity, a1 = Infinity;
+  for (let i = 0; i < LAND_BIOMES.length; i++) {
+    const a = angleTo(LAND_BIOMES[i], d);
+    if (a < a0) { a1 = a0; i1 = i0; a0 = a; i0 = i; }
+    else if (a < a1) { a1 = a; i1 = i; }
+  }
+  return [i0, i1];
+}
+
+/** Walk `p` sideways until it sits on the warped border between two centres. */
+function slideToBorder(p: THREE.Vector3, a: THREE.Vector3, b: THREE.Vector3): void {
+  const w = new THREE.Vector3();
+  const along = new THREE.Vector3();
+  for (let it = 0; it < 4; it++) {
+    warpDir(p, w);
+    const d = a.angleTo(w) - b.angleTo(w);
+    along.copy(b).sub(a).addScaledVector(p, -b.dot(p) + a.dot(p));
+    if (along.lengthSq() < 1e-8) return;
+    along.normalize();
+    // Small steps only: a big jump here folds the centre line back on itself and
+    // every later sample (tangent, water field, bridge placement) inherits the mess.
+    const ang = THREE.MathUtils.clamp(d * 0.5, -0.02, 0.02);
+    p.multiplyScalar(Math.cos(ang)).addScaledVector(along, Math.sin(ang)).normalize();
+  }
+}
 
 /**
- * Great-circle arcs joining every pair of zone centres. These are the causeways
- * the player can drive: the channel field is forced dry across them so no zone
- * is walled off by the energy rivers. Rebuilt whenever the centres move.
+ * A river along the border between two land zones: the great circle that is
+ * equidistant from both centres, cut to the stretch that belongs to the pair and
+ * then to the first 60% of that stretch, measured from the sea end.
  */
-function crossingArcs(): Arc[] {
-  if (arcs) return arcs;
-  const list: Arc[] = [];
-  for (let i = 0; i < LAND_BIOMES.length; i++) {
+function buildRiver(ia: number, ib: number, sea: THREE.Vector3): RiverLine | null {
+  const a = LAND_BIOMES[ia].center;
+  const b = LAND_BIOMES[ib].center;
+  const m = _v.copy(a).sub(b);
+  if (m.lengthSq() < 1e-8) return null;
+  m.normalize();
+  const e1 = new THREE.Vector3().crossVectors(m, sea);
+  if (e1.lengthSq() < 1e-6) e1.crossVectors(m, new THREE.Vector3(0, 1, 0));
+  e1.normalize();
+  const e2 = new THREE.Vector3().crossVectors(m, e1).normalize();
+
+  const N = 360;
+  const pts: THREE.Vector3[] = [];
+  const mine: boolean[] = [];
+  for (let k = 0; k < N; k++) {
+    const phi = (k / N) * Math.PI * 2;
+    const p = new THREE.Vector3().copy(e1).multiplyScalar(Math.cos(phi)).addScaledVector(e2, Math.sin(phi)).normalize();
+    pts.push(p);
+    const [i0, i1] = nearestPair(p);
+    mine.push((i0 === ia && i1 === ib) || (i0 === ib && i1 === ia));
+  }
+  // Longest circular run that belongs to this pair.
+  let bestStart = -1, bestLen = 0;
+  for (let k = 0; k < N; k++) {
+    if (!mine[k] || mine[(k + N - 1) % N]) continue;
+    let len = 0;
+    while (len < N && mine[(k + len) % N]) len++;
+    if (len > bestLen) { bestLen = len; bestStart = k; }
+  }
+  if (bestStart < 0 || bestLen < 4) return null;
+  const run: THREE.Vector3[] = [];
+  for (let k = 0; k < bestLen; k++) run.push(pts[(bestStart + k) % N]);
+
+  // Orient the run so it starts at the end nearest the sea.
+  const seaAng = (p: THREE.Vector3) => p.angleTo(sea);
+  const flip = seaAng(run[0]) > seaAng(run[run.length - 1]);
+  if (flip) run.reverse();
+  const arcLen = run[0].angleTo(run[run.length - 1]) * PLANET_RADIUS_LOCAL;
+  const target = arcLen * 0.6;
+
+  const points: THREE.Vector3[] = [];
+  const half: number[] = [];
+  let travelled = 0;
+  const centre = run[0].clone();
+  for (let k = 0; k < run.length; k++) {
+    if (k > 0) travelled += run[k - 1].angleTo(run[k]) * PLANET_RADIUS_LOCAL;
+    if (travelled > target) break;
+    // Keep the river clear of the zone hearts.
+    let clear = true;
+    for (const z of LAND_BIOMES) if (run[k].angleTo(z.center) * PLANET_RADIUS_LOCAL < 20) clear = false;
+    if (!clear && k > 2) break;
+    // Gentle meander, strongest near the middle of the run.
+    const u = travelled / Math.max(1, target);
+    const side = new THREE.Vector3().crossVectors(run[k], m).normalize();
+    const sway = Math.sin(u * 7.5 + ia) * 1.6 + fbm3(run[k].x * 9, run[k].y * 9, run[k].z * 9, 2) * 1.4;
+    const p = run[k].clone().addScaledVector(side, sway / PLANET_RADIUS_LOCAL).normalize();
+    // Slide the point onto the real (warped) border, so the river hugs the seam.
+    slideToBorder(p, a, b);
+    // The warp can push the border close to a zone heart: keep the river well
+    // clear of the landmarks that stand there.
+    let clearance = Infinity;
+    for (const z of LAND_BIOMES) clearance = Math.min(clearance, p.angleTo(z.center) * PLANET_RADIUS_LOCAL);
+    if (clearance < 18 && k > 2) break;
+    // Drop backtracks: consecutive samples have to keep moving down the river.
+    const prev = points[points.length - 1];
+    if (prev && prev.angleTo(p) * PLANET_RADIUS_LOCAL < 0.25) continue;
+    points.push(p);
+    const taper = Math.sqrt(Math.max(0, 1 - u));
+    half.push(2.7 * Math.min(1, 0.35 + taper * 1.1));
+  }
+  if (points.length < 4) return null;
+  return { points, half, center: centre, cos: Math.cos((target + 20) / PLANET_RADIUS_LOCAL), pair: [ia, ib] };
+}
+
+let riversReady = false;
+function ensureWater(): void {
+  if (riversReady) return;
+  riversReady = true;
+  RIVERS.length = 0;
+  const sea = LAND_BIOMES[SEA_ZONE].center;
+  for (let i = 1; i < LAND_BIOMES.length; i++) {
     for (let j = i + 1; j < LAND_BIOMES.length; j++) {
-      const a = LAND_BIOMES[i].center;
-      const b = LAND_BIOMES[j].center;
-      const n = new THREE.Vector3().crossVectors(a, b);
-      if (n.lengthSq() < 1e-8) continue;
-      list.push({ a, b, n: n.normalize(), cos: a.dot(b), len: a.angleTo(b) });
+      const r = buildRiver(i, j, sea);
+      if (r) RIVERS.push(r);
     }
   }
-  arcs = list;
-  return arcs;
+  BRIDGES.length = 0;
+  for (const z of LAND_BIOMES) {
+    if (z.id === 'river') continue;
+    const deck = seaDeck(z.center, sea);
+    if (deck) BRIDGES.push(deck);
+  }
+  for (const r of RIVERS) {
+    const deck = riverDeck(r);
+    if (deck) BRIDGES.push(deck);
+  }
 }
 
-const _proj = new THREE.Vector3();
-/** Distance from the last `arcDistance` point to the nearer end of its arc. */
-let _endDist = 0;
-
-/** Surface distance from `d` to the closest point of `arc`, given `side`. */
-function arcDistance(arc: Arc, d: THREE.Vector3, side: number): number {
-  _proj.copy(d).addScaledVector(arc.n, -d.dot(arc.n));
-  if (_proj.lengthSq() < 1e-10) {
-    _endDist = (arc.len * PLANET_RADIUS_LOCAL) / 2;
-    return _endDist;
-  }
-  _proj.normalize();
-  const da = arc.a.angleTo(d) * PLANET_RADIUS_LOCAL;
-  const db = arc.b.angleTo(d) * PLANET_RADIUS_LOCAL;
-  _endDist = Math.min(da, db);
-  // Within the arc's own span both endpoints are inside one arc length of it.
-  if (arc.a.dot(_proj) >= arc.cos && arc.b.dot(_proj) >= arc.cos) {
-    return Math.asin(Math.min(1, side)) * PLANET_RADIUS_LOCAL;
-  }
-  return _endDist;
-}
-
-/**
- * How much `d` belongs to a crossing, 0 on open channel and 1 on the causeway
- * core. The dot with the arc's plane normal prunes almost every point with one
- * multiply, which matters because the ground mesh samples this a lot at load.
- */
-function crossingAt(d: THREE.Vector3): number {
-  let best = 0;
-  const reach = Math.sin((CROSS_FADE + CROSS_APRON) / PLANET_RADIUS_LOCAL);
-  for (const arc of crossingArcs()) {
-    const side = Math.abs(d.dot(arc.n));
-    if (side > reach) continue;
-    const dist = arcDistance(arc, d, side);
-    // The causeway opens out where it meets a zone, so leaving a zone in the
-    // general direction of another never walks straight into a channel.
-    const apron = CROSS_APRON * (1 - THREE.MathUtils.clamp(_endDist / APRON_REACH, 0, 1));
-    const core = CROSS_CORE + apron;
-    const fade = CROSS_FADE + apron;
-    if (dist >= fade) continue;
-    const t = 1 - THREE.MathUtils.smoothstep(dist, core, fade);
-    if (t > best) best = t;
+/** Distance, in surface units, from `d` to the nearest river edge. */
+function riverField(d: THREE.Vector3): number {
+  let best = 1e9;
+  for (const r of RIVERS) {
+    if (d.dot(r.center) < r.cos) continue;
+    let bi = 0, bd = Infinity;
+    for (let i = 0; i < r.points.length; i++) {
+      const ang = r.points[i].angleTo(d);
+      if (ang < bd) { bd = ang; bi = i; }
+    }
+    if (bd === Infinity) continue;
+    const edge = bd * PLANET_RADIUS_LOCAL - r.half[bi];
+    if (edge < best) best = edge;
   }
   return best;
 }
 
-/**
- * Signed channel field before the crossings are cut: negative inside an energy
- * channel, positive on metal. Exported so zone scenery can find the channels it
- * bridges.
- *
- * Channels follow the zero set of a smooth noise, which draws long winding
- * lines instead of blobs. The river zone carries wider channels and a second,
- * finer network of veins; the fortress keeps its channels thin. Each zone core
- * is held dry so its landmarks and wonders always stand on solid ground.
- */
-export function channelField(d: THREE.Vector3): number {
-  const river = LAND_BIOMES[0];
-  const near = THREE.MathUtils.smoothstep(-angleTo(river, d), -1.0, -0.25);
-  const fortress = THREE.MathUtils.smoothstep(-angleTo(LAND_BIOMES[3], d), -0.9, -0.3);
-
-  const bend = fbm3(d.x * 3.6 - 6, d.y * 3.6 + 13, d.z * 3.6 + 4, 2) * 0.035;
-  const n = fbm3(d.x * 1.25 + 11, d.y * 1.25 - 2, d.z * 1.25 + 7, 3) + bend;
-  const width = 0.056 + 0.04 * near - 0.016 * fortress;
-  let channel = Math.abs(n) - width;
-  if (near > 0.01) {
-    const vein = fbm3(d.x * 2.6 - 17, d.y * 2.6 + 5, d.z * 2.6 + 21, 2);
-    channel = Math.min(channel, Math.abs(vein) - 0.03 * near);
+/** True within about `pad` units of one of the sea bridge routes. */
+export function nearSeaRoute(d: THREE.Vector3, pad = 11): boolean {
+  const sea = LAND_BIOMES[SEA_ZONE].center;
+  const n = new THREE.Vector3();
+  for (const z of LAND_BIOMES) {
+    if (z.id === 'river') continue;
+    const len = sea.angleTo(z.center) * PLANET_RADIUS_LOCAL;
+    if (d.angleTo(sea) * PLANET_RADIUS_LOCAL > len + pad) continue;
+    n.crossVectors(sea, z.center);
+    if (n.lengthSq() < 1e-8) continue;
+    n.normalize();
+    if (Math.asin(Math.min(1, Math.abs(d.dot(n)))) * PLANET_RADIUS_LOCAL < pad) return true;
   }
+  return false;
+}
 
-  let keep = 1;
-  for (const b of LAND_BIOMES) {
-    const core = CORE[b.id as Exclude<BiomeId, 'ocean'>];
-    keep = Math.min(keep, THREE.MathUtils.smoothstep(angleTo(b, d), core, core + 0.28));
+/** One bridge deck: a polyline with a height at every sample. */
+export type BridgeLine = { points: THREE.Vector3[]; heights: number[]; halfWidth: number };
+
+/** Every deck, published for the scenery to draw. */
+export const BRIDGES: BridgeLine[] = [];
+
+/** Deck height: above the water, arching a little over the middle. */
+function deckHeights(n: number, base: number, arch: number): number[] {
+  const out: number[] = [];
+  for (let k = 0; k <= n; k++) out.push(base + arch * Math.sin((Math.PI * k) / n));
+  return out;
+}
+
+/** Push `p` along `step` until it stands on dry ground, two units past the bank. */
+function pushToDry(p: THREE.Vector3, step: THREE.Vector3, max = 16): THREE.Vector3 {
+  if (oceanField(p) > 0.25) return p.clone();
+  const t = new THREE.Vector3();
+  for (let s = 0.5; s <= max; s += 0.5) {
+    const ang = s / PLANET_RADIUS_LOCAL;
+    t.copy(p).multiplyScalar(Math.cos(ang)).addScaledVector(step, Math.sin(ang)).normalize();
+    if (oceanField(t) > 0.25) {
+      const extra = (s + 2) / PLANET_RADIUS_LOCAL;
+      return p.clone().multiplyScalar(Math.cos(extra)).addScaledVector(step, Math.sin(extra)).normalize();
+    }
   }
-  return keep * channel + (1 - keep) * Math.max(channel, 0.3);
+  return p.clone();
 }
 
 /**
- * Channel field with the crossings cut through it. Where a great-circle arc
- * between two zone centres passes over a channel, the field is lifted to dry
- * land, so every zone can be driven to from every other.
+ * Sample a deck from `a` to `b` between two fractions, with one extra sample at
+ * each end. The extra sample is the registered overhang: the model stops one
+ * unit short, so no deck geometry ever stands outside the walkable span.
+ */
+function sampleArc(a: THREE.Vector3, b: THREE.Vector3, from: number, to: number, halfWidth: number, base: number, arch: number): BridgeLine {
+  const len = a.angleTo(b) * PLANET_RADIUS_LOCAL;
+  const span = (to - from) * len;
+  const n = Math.max(6, Math.round(span / 1.0));
+  const points: THREE.Vector3[] = [];
+  const d = new THREE.Vector3();
+  for (let k = 0; k <= n; k++) {
+    arcDir(a, b, THREE.MathUtils.clamp(from + ((to - from) * k) / n, 0, 1), d);
+    points.push(d.clone());
+  }
+  const heights = deckHeights(n, base, arch);
+  // The last sample at each end sits at ground level, so the deck meets the shore
+  // instead of ending in a lip that the collision pass would read as a wall.
+  heights[0] = PLANET_RADIUS_LOCAL + 0.45;
+  heights[n] = PLANET_RADIUS_LOCAL + 0.45;
+  return { points, heights, halfWidth };
+}
+
+/**
+ * Walk outwards from `start` in direction `step` (a unit tangent) until three
+ * samples in a row are dry, then two units further. That is where the deck ends,
+ * so both ends are always on land rather than over open water.
+ */
+function dryEnd(start: THREE.Vector3, step: THREE.Vector3, limit: number): number {
+  let run = 0;
+  let lastDry = 0;
+  const p = new THREE.Vector3();
+  for (let s = 0.25; s <= limit; s += 0.25) {
+    const ang = s / PLANET_RADIUS_LOCAL;
+    p.copy(start).multiplyScalar(Math.cos(ang)).addScaledVector(step, Math.sin(ang)).normalize();
+    if (oceanField(p) > 0.25) {
+      run++;
+      lastDry = s;
+      if (run >= 3) return lastDry + 2;
+    } else run = 0;
+  }
+  return limit;
+}
+
+/** One deck from the island out to a land zone's coast. */
+function seaDeck(land: THREE.Vector3, sea: THREE.Vector3): BridgeLine | null {
+  const len = sea.angleTo(land);
+  const d = new THREE.Vector3();
+  // Cross the water first: find the first and last wet sample on the arc.
+  let waterIn = -1;
+  let waterOut = -1;
+  const steps = Math.max(40, Math.round((len * PLANET_RADIUS_LOCAL) / 0.4));
+  for (let k = 0; k <= steps; k++) {
+    const t = k / steps;
+    arcDir(sea, land, t, d);
+    if (oceanField(d) < -0.15) {
+      if (waterIn < 0) waterIn = t;
+      waterOut = t;
+    }
+  }
+  if (waterIn < 0) return null;
+  // Then push the ends out onto dry ground in both directions.
+  arcDir(sea, land, waterIn, d);
+  const back = new THREE.Vector3().subVectors(sea, d).addScaledVector(d, -new THREE.Vector3().subVectors(sea, d).dot(d)).normalize();
+  const inLen = Math.min(20, dryEnd(d, back, 22));
+  arcDir(sea, land, waterOut, d);
+  const fwd = new THREE.Vector3().subVectors(land, d).addScaledVector(d, -new THREE.Vector3().subVectors(land, d).dot(d)).normalize();
+  const outLen = Math.min(20, dryEnd(d, fwd, 22));
+  const total = len * PLANET_RADIUS_LOCAL;
+  const from = Math.max(0, waterIn * total - inLen - 1) / total;
+  const to = Math.min(1, waterOut * total + outLen + 1) / total;
+  const a = new THREE.Vector3();
+  const b2 = new THREE.Vector3();
+  arcDir(sea, land, from, a);
+  arcDir(sea, land, to, b2);
+  const t0 = new THREE.Vector3().subVectors(sea, a).addScaledVector(a, -new THREE.Vector3().subVectors(sea, a).dot(a)).normalize();
+  const t1 = new THREE.Vector3().subVectors(land, b2).addScaledVector(b2, -new THREE.Vector3().subVectors(land, b2).dot(b2)).normalize();
+  const p0 = pushToDry(a, t0);
+  const p1 = pushToDry(b2, t1);
+  return sampleArc(p0, p1, 0, 1, 3.2, PLANET_RADIUS_LOCAL + 1.35, 0.95);
+}
+
+/**
+ * One deck across a river. The crossing is the river point nearest the great
+ * circle joining the two land centres, but never within 20 units of a zone heart
+ * (that is where the landmarks stand); if the natural crossing is too close, the
+ * bridge slides along the river until it is clear.
+ */
+function riverDeck(river: RiverLine): BridgeLine | null {
+  // The river's own pair of zones, not just the first two land zones.
+  const m = new THREE.Vector3().crossVectors(LAND_BIOMES[river.pair[0]].center, LAND_BIOMES[river.pair[1]].center).normalize();
+  const cand: { i: number; side: number; clear: number; across: THREE.Vector3; tangent: THREE.Vector3; half: number }[] = [];
+  for (let i = 2; i < river.points.length - 2; i++) {
+    const p = river.points[i];
+    let clear = Infinity;
+    for (const z of LAND_BIOMES) clear = Math.min(clear, p.angleTo(z.center) * PLANET_RADIUS_LOCAL);
+    if (clear < 20) continue;
+    const tangent = new THREE.Vector3().subVectors(river.points[i + 2], river.points[i - 2]);
+    tangent.addScaledVector(p, -tangent.dot(p));
+    if (tangent.lengthSq() < 1e-10) continue;
+    tangent.normalize();
+    // Square to the river: this is the direction the deck runs, always.
+    const across = new THREE.Vector3().crossVectors(p, tangent).normalize();
+    cand.push({ i, side: Math.abs(p.dot(m)), clear, across, tangent, half: river.half[i] });
+  }
+  if (cand.length === 0) {
+    console.warn('[riverDeck] no river point clear of every zone centre');
+    return null;
+  }
+  // A crossing has to be on water, with dry ground a short way out on both banks.
+  const limit = (c: { half: number }) => c.half + 4;
+  const good = cand.filter((c) => {
+    if (oceanField(river.points[c.i]) >= 0) return false;
+    const outA = dryEnd(river.points[c.i], c.across.clone().negate(), 14);
+    const outB = dryEnd(river.points[c.i], c.across, 14);
+    return outA <= limit(c) && outB <= limit(c);
+  });
+  good.sort((x, y) => x.side - y.side || x.clear - y.clear);
+  const pick = good.length > 0
+    ? good[0]
+    : cand.slice().sort((x, y) => x.side - y.side)[0];
+  if (good.length === 0) console.warn('[riverDeck] no wet crossing found, falling back to the point nearest the centre line');
+  const cross = river.points[pick.i];
+  const back = pick.across.clone().negate();
+  const angA = (dryEnd(cross, back, 14) + 1) / PLANET_RADIUS_LOCAL;
+  const angB = (dryEnd(cross, pick.across, 14) + 1) / PLANET_RADIUS_LOCAL;
+  const p0 = pushToDry(cross.clone().multiplyScalar(Math.cos(angA)).addScaledVector(back, Math.sin(angA)).normalize(), back);
+  const p1 = pushToDry(cross.clone().multiplyScalar(Math.cos(angB)).addScaledVector(pick.across, Math.sin(angB)).normalize(), pick.across);
+  return sampleArc(p0, p1, 0, 1, 2.6, PLANET_RADIUS_LOCAL + 1.5, 0.3);
+}
+
+/**
+ * The sea decks, answered straight from the arcs rather than from the sampled
+ * polylines: a walker follows the great circle from the island to a land centre,
+ * and that is exactly where the deck has to be walkable.
+ */
+function seaDeckAt(d: THREE.Vector3): number | null {
+  const sea = LAND_BIOMES[SEA_ZONE].center;
+  const n = new THREE.Vector3();
+  for (const z of LAND_BIOMES) {
+    if (z.id === 'river') continue;
+    const len = sea.angleTo(z.center) * PLANET_RADIUS_LOCAL;
+    const along = sea.angleTo(d) * PLANET_RADIUS_LOCAL;
+    if (along > len * 0.9) continue;
+    n.crossVectors(sea, z.center);
+    if (n.lengthSq() < 1e-8) continue;
+    n.normalize();
+    const side = Math.asin(Math.min(1, Math.abs(d.dot(n)))) * PLANET_RADIUS_LOCAL;
+    if (side > 3.2) continue;
+    const start = islandRadius(d) - 2.5;
+    if (along < start) continue;
+    const u = THREE.MathUtils.clamp((along - start) / Math.max(1, len * 0.9 - start), 0, 1);
+    return PLANET_RADIUS_LOCAL + 1.35 + 0.95 * Math.sin(Math.PI * u);
+  }
+  return null;
+}
+
+/** Height of a bridge deck at `d`, or null when `d` is not on a deck. */
+export function bridgeHeight(d: THREE.Vector3): number | null {
+  const seaDeck = seaDeckAt(d);
+  if (seaDeck !== null) return seaDeck;
+  for (const b of BRIDGES) {
+    let bi = 0;
+    let bd = Infinity;
+    for (let i = 0; i < b.points.length; i++) {
+      const ang = b.points[i].angleTo(d);
+      if (ang < bd) { bd = ang; bi = i; }
+    }
+    if (bd * PLANET_RADIUS_LOCAL <= b.halfWidth) return b.heights[bi];
+  }
+  return null;
+}
+
+/**
+ * Signed water field, in surface units: negative in water, positive on land,
+ * and the magnitude is the distance to the nearest shoreline.
  *
- * The whole corridor is pulled to `CROSS_DRY`, land included, not just the wet
- * part: that keeps scattered props off the road and lays the road at a constant
- * rise, so it reads as a causeway instead of a path that wanders through rocks.
+ * There are only two kinds of water now. The sea fills the river zone apart
+ * from a wobbling island in its middle, and three rivers run out of the sea
+ * along the borders between the land zones. Everything else is dry.
  */
 export function oceanField(d: THREE.Vector3): number {
-  const field = channelField(d);
-  const dry = crossingAt(d);
-  if (dry <= 0) return field;
-  return THREE.MathUtils.lerp(field, CROSS_DRY, dry);
+  ensureWater();
+  const blend = landBiomeBlend(d);
+  const border = blend.margin * PLANET_RADIUS_LOCAL;
+  let land: number;
+  if (blend.primary.id === 'river') {
+    const fromIsland = angleTo(LAND_BIOMES[SEA_ZONE], d) * PLANET_RADIUS_LOCAL - islandRadius(d);
+    land = fromIsland < 0 ? -fromIsland : -Math.min(fromIsland, border);
+  } else {
+    const fromSea = blend.secondary.id === 'river' ? border : 40;
+    const fromRiver = riverField(d);
+    land = Math.min(fromSea, fromRiver);
+  }
+  return land;
 }
 
-
 export function isOcean(d: THREE.Vector3): boolean {
+  if (bridgeHeight(d) !== null) return false;
   return oceanField(d) < 0;
 }
 
