@@ -240,7 +240,7 @@
   <title>{name} · {$gameState.space.planetName}</title>
   <meta
     name="description"
-    content="Explore procedural low-poly planets, recover starship parts, craft a ship, gather fuel, and journey endlessly through space."
+    content="一颗被轨道矿车环绕的机械星球，四个区域，四座信标，一辆能变形的机器人。"
   />
 </svelte:head>
 
@@ -251,7 +251,7 @@
     {#if !$gameState.ready}
       <div class="loading" aria-live="polite">
         <div class="orbit"><span></span></div>
-        <p>Shaping a small world…</p>
+        <p>正在锻铸星球…</p>
       </div>
     {/if}
 
@@ -273,24 +273,20 @@
         on:photo={() => game?.togglePhoto()}
         on:journal={toggleJournal}
         on:interact={interactFromHud}
-        on:refuel={() => game?.refuelShip()}
-        on:launch={() => game?.launchFlight()}
-        on:earth={returnToEarth}
       />
     {/if}
     {#if $gameState.ready && $gameState.flying && !$gameState.photo && !$gameState.help && !$gameState.journalOpen}
       <div class="flight-hud" aria-live="polite">
         <div class="flight-status">
-          <span>Direct flight</span>
-          <strong>{$gameState.space.fuel} fuel</strong>
+          <span>航行中</span>
         </div>
-        <button class="land" on:click={() => game?.landFlight()}>Return to {$gameState.space.planetName}</button>
+        <button class="land" on:click={() => game?.landFlight()}>返回 {$gameState.space.planetName}</button>
         <div class="crosshair" aria-hidden="true"><span></span></div>
         <p class="flight-hint">
           {#if $gameState.isTouch}
-            Steer with the stick · boost with the rocket · approach a terrain world to land
+            用摇杆转向 · 火箭键加速 · 靠近标记的星球降落
           {:else}
-            <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> steer · <kbd>Shift</kbd> boost · <kbd>Space</kbd> return · approach a terrain world to land
+            <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 转向 · <kbd>Shift</kbd> 加速 · <kbd>空格</kbd> 返回 · 靠近星球降落
           {/if}
         </p>
       </div>
@@ -329,6 +325,8 @@
         }}
         on:hop={() => game?.input.queueHop()}
         on:run={(e) => game && (game.input.touchRun = e.detail.active)}
+        on:transform={() => game?.input.queueTransform?.()}
+        on:hero={() => game?.input.queueHeroReturn?.()}
       />
     {/if}
 

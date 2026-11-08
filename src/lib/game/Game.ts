@@ -18,10 +18,8 @@ import {
 } from './planet';
 import { NIGHT } from './night';
 import { LightPool, emitter, type Emitter } from './lights';
-import { BOAT_SEAT, LAUNCH_RANGE, Wake, buildBoat, findLaunchPoint } from './boat';
 import { buildWorldProps, type Dynamic } from './props';
 import {
-  Character,
   buildAlienCritter,
   buildBear,
   buildCrab,
@@ -49,6 +47,9 @@ import { Weather, weatherFor } from './weather';
 import type { BiomeCaption } from './store';
 import { Shards } from './shards';
 import { Fireworks } from './fireworks';
+import { Protagonist, type Form } from './robots/protagonist';
+import { TransformBurst } from './robots/burst';
+import { controlState } from './ui/control';
 import {
   JOURNAL_BIOMES,
   biomeJournalKey,
@@ -117,36 +118,37 @@ export type GameCallbacks = {
   onSpaceNotice: (notice: { kicker: string; text: string }) => void;
 };
 
-// Tuned against the explorer's stride: `character.ts` solves the walk cycle
-// from the ground actually covered, so these set the cadence the legs run at.
-// Much above `RUN_SPEED` and the scamper stops reading as a run.
+// Tank-style driving: forward/back along the machine's own heading, left/right
+// turning it. The robot walks and the vehicle rolls; each has its own speed
+// rules, so these constants come in pairs.
 const WALK_SPEED = 4.6;
 const RUN_SPEED = 8.2;
-const TURN_RATE = 11;
+/** Robot form turns on the spot. */
+const ROBOT_TURN = 2.6;
+/** Vehicle cruise, boost, and how much of the cruise it keeps in reverse. */
+const VEH_SPEED = 12;
+const VEH_BOOST = 17.5;
+const VEH_REVERSE = 0.35;
+/** Per-second approaches to the target speed: throttle up fast, coast down slow. */
+const VEH_ACCEL = 1.7;
+const VEH_COAST = 0.42;
+/** Vehicle yaw rate at walking pace; it eases off with speed so turns swing wide. */
+const VEH_TURN = 1.6;
 const GRAVITY = 24;
 const HOP_VELOCITY = 7.5;
 const INTERACT_RANGE = 3.6;
 /** How close the player has to be to pet an animal, in surface units. */
 const PET_RANGE = 2.8;
-/** Seconds the explorer keeps a hand out after a pat. */
-const PET_POSE = 1.4;
-/** Radius of the explorer's footprint, in surface units. */
-const PLAYER_RADIUS = 0.35;
-/** Seconds of no progress toward a click target before the walk is cancelled. */
-const STUCK_TIMEOUT = 0.6;
+/** Radius of the machine's footprint, in surface units. */
+const PLAYER_RADIUS = 0.38;
+const VEHICLE_RADIUS = 0.55;
+/** Length of the transform effect, in seconds; the model swaps halfway. */
+const TRANSFORM_TIME = 1;
 /** Journal stats are written to storage this often, in seconds, not every step. */
 const JOURNAL_FLUSH = 4;
 const CAM_MIN = 5;
 const CAM_MAX = 28;
 const GLOBE_MARGIN = 10;
-/** Boat cruising speed and the multiplier while "running". */
-const BOAT_SPEED = 7;
-const BOAT_RUN = 1.5;
-/** Boat heading lerp rate, well below TURN_RATE so it swings wide. */
-const BOAT_TURN = 2.2;
-/** Per-second approach rates toward the target speed: throttle up, then coast down. */
-const BOAT_ACCEL = 1.4;
-const BOAT_DRAG = 0.9;
 /** Spaceflight is always moving; Shift/touch-run raises the cruise speed. */
 const FLIGHT_SPEED = 34;
 const FLIGHT_BOOST = 56;
@@ -214,17 +216,26 @@ export class Game {
   private callbacks: GameCallbacks;
   private canvas: HTMLCanvasElement;
 
-  // Player: a unit direction on the sphere plus a tangent heading.
+  // Player: a unit direction on the sphere plus a tangent heading. The heading
+  // is the machine's own front, and every input is relative to it.
   private dir = new THREE.Vector3();
   private heading = new THREE.Vector3();
+  private player: Protagonist;
+  private burst = new TransformBurst();
   private hopH = 0;
   private hopV = 0;
   private airborne = false;
-  private animSpeed = 0;
-  private character = new Character();
-  private walkTarget: THREE.Vector3 | null = null;
-  private stuckTime = 0;
-  private targetRing: THREE.Mesh;
+  /** Signed ground speed along the heading; negative is reversing. */
+  private moveSpeed = 0;
+  /** Steering input this frame, kept so the vehicle can roll into the turn. */
+  private steer = 0;
+  /** Seconds left of the transform effect; zero when idle. */
+  private transformTime = 0;
+  private transformSwapped = false;
+  /** Camera shake amplitude left over from a transform, decays to zero. */
+  private shake = 0;
+  /** Seconds before the camera starts swinging back behind the heading. */
+  private orbitHold = 0;
   private colliders: ColliderGrid;
 
   // Starship: salvage is scattered on Earth; the completed ship can be flown
@@ -247,17 +258,6 @@ export class Game {
   private landingStartRotation = new THREE.Quaternion();
   private landingEndRotation = new THREE.Quaternion();
 
-  // Boat: one rowboat that is launched from a shore, sailed, and docked where it lands.
-  private boat: THREE.Group;
-  private boatDir = new THREE.Vector3();
-  private boatHeading = new THREE.Vector3();
-  private boatSpeed = 0;
-  private boatPlaced = false;
-  private boating = false;
-  private wake = new Wake();
-  /** Nearest launchable water within reach, refreshed on the biome cadence. */
-  private launchDir: THREE.Vector3 | null = null;
-
   // Camera: a tangent "forward" carried along with the player, pitch, distance.
   private camForward = new THREE.Vector3();
   private camPitch = 0.92;
@@ -277,8 +277,6 @@ export class Game {
   private dynamics: Dynamic[] = [];
   private critters: Critter[] = [];
   private hearts = new Hearts();
-  /** Seconds left of the explorer's petting pose. */
-  private petTime = 0;
   private clouds: Clouds;
   private skyline: Skyline;
   private aurora: Aurora;
@@ -430,19 +428,6 @@ export class Game {
       this.gems.push({ wonder: w, dir: wonderDir(w), mesh, ring, frameQ, base, up, light });
     }
 
-    // Click-to-walk marker.
-    this.targetRing = new THREE.Mesh(
-      new THREE.RingGeometry(0.45, 0.6, 24),
-      new THREE.MeshBasicMaterial({ color: 0xfff2c4, transparent: true, opacity: 0.8, side: THREE.DoubleSide })
-    );
-    this.targetRing.visible = false;
-    this.scene.add(this.targetRing);
-
-    // The boat waits offstage until it is launched from a shore.
-    this.boat = buildBoat();
-    this.boat.visible = false;
-    this.scene.add(this.boat, this.wake.group);
-
     // Critters.
     const spawn = (
       model: THREE.Group,
@@ -481,14 +466,13 @@ export class Game {
     this.colliders.resolve(this.dir, PLAYER_RADIUS);
     this.heading.copy(fire).addScaledVector(this.dir, -fire.dot(this.dir)).normalize();
     this.camForward.copy(this.heading);
-    // The gait solves its stride from real ground speed, so it needs to know
-    // what a full run is worth.
-    this.character.topSpeed = RUN_SPEED;
-    this.character.group.traverse((o) => {
+    this.player = new Protagonist('hero', '主角');
+    this.player.root.traverse((o) => {
       if (o instanceof THREE.Mesh) o.castShadow = true;
     });
-    this.scene.add(this.character.group);
-    this.placeCharacter();
+    this.scene.add(this.player.root, this.burst.group);
+    this.placePlayer();
+    this.publishControl();
 
     // Globe view first: the camera hangs above the player's hemisphere.
     this.globePitch = Math.asin(THREE.MathUtils.clamp(this.dir.y, -0.9, 0.9)) + 0.25;
@@ -522,15 +506,14 @@ export class Game {
     this.camForward.copy(this.heading);
     this.exitIntro();
     if (this.globe) this.setGlobe(false);
-    this.placeCharacter();
+    this.moveSpeed = 0;
+    this.placePlayer();
   }
 
   setOverlayOpen(open: boolean): void {
     this.overlayOpen = open;
     this.input.enabled = !open;
     if (open) {
-      this.walkTarget = null;
-      this.targetRing.visible = false;
       this.input.touchMove.x = 0;
       this.input.touchMove.y = 0;
       this.input.touchRun = false;
@@ -599,9 +582,7 @@ export class Game {
     this.flightWarning = 0;
     this.landingTarget = null;
     this.landingElapsed = 0;
-    this.walkTarget = null;
-    this.targetRing.visible = false;
-    this.character.group.visible = false;
+    this.player.setVisible(false);
     this.ship.position.copy(this.shipDir).multiplyScalar(walkRadius(this.shipDir) + 2.5);
     this.flightForward.copy(target.position).sub(this.ship.position).normalize();
     this.flightUp.copy(this.shipDir).addScaledVector(this.flightForward, -this.shipDir.dot(this.flightForward));
@@ -619,7 +600,7 @@ export class Game {
     if (!this.flying || this.arriving) return;
     this.flying = false;
     this.flightSpeed = 0;
-    this.character.group.visible = true;
+    this.player.setVisible(true);
     surfaceFrame(this.shipDir, -0.35, _m, 0.08).decompose(this.ship.position, this.ship.quaternion, this.ship.scale);
     this.transition = 1.2;
     this.callbacks.onFlight(false);
@@ -648,8 +629,6 @@ export class Game {
     if (this.photo === on) return;
     this.photo = on;
     this.exitIntro();
-    if (on) this.targetRing.visible = false;
-    else this.targetRing.visible = this.walkTarget !== null;
     this.callbacks.onPhoto(on);
   }
 
@@ -669,6 +648,7 @@ export class Game {
     cancelAnimationFrame(this.raf);
     this.input.dispose();
     this.audio.dispose();
+    this.burst.dispose();
     this.planets.dispose();
     this.scene.traverse((o) => {
       if (o instanceof THREE.Mesh) {
@@ -728,8 +708,6 @@ export class Game {
       const d = _v1.copy(this.camPos).normalize();
       this.globePitch = Math.asin(THREE.MathUtils.clamp(d.y, -0.95, 0.95));
       this.globeYaw = Math.atan2(d.x, d.z);
-      this.walkTarget = null;
-      this.targetRing.visible = false;
     }
     this.setShadowBounds(on ? PLANET_RADIUS + 14 : 30);
     this.callbacks.onGlobe(on);
@@ -810,7 +788,9 @@ export class Game {
     const click = input.consumeClick();
     const hop = input.consumeHop();
     const interact = input.consumeInteract();
+    const transform = input.consumeTransform();
     this.dragThisFrame = orbit.dx !== 0 || orbit.dy !== 0;
+    if (this.dragThisFrame) this.orbitHold = 1.2;
 
     if (this.flying) {
       if (!this.overlayOpen && hop) {
@@ -838,27 +818,19 @@ export class Game {
       else this.camDist = THREE.MathUtils.clamp(this.camDist * Math.exp(zoom * 0.12), CAM_MIN, CAM_MAX);
     }
 
-    if (click && !this.overlayOpen) {
-      this.raycaster.setFromCamera(new THREE.Vector2(click.x, click.y), this.camera);
-      const hits = this.raycaster.intersectObjects([this.ground, this.water], false);
-      if (hits.length > 0) {
-        this.audio.start();
-        this.walkTarget = hits[0].point.clone().normalize();
-        this.targetRing.visible = !this.photo;
-        const r = walkRadius(this.walkTarget) + 0.1;
-        this.targetRing.position.copy(this.walkTarget).multiplyScalar(r);
-        tangentBasis(this.walkTarget, 0, _v1, _v3);
-        _m.makeBasis(_v1, this.walkTarget, _v3);
-        this.targetRing.quaternion.setFromRotationMatrix(_m);
-        this.targetRing.rotateX(-Math.PI / 2);
-        if (this.globe) this.setGlobe(false);
-      }
+    // A click on the ground no longer walks anywhere. Clicks are only read to
+    // pick another robot; the hero is the only machine right now.
+    void click;
+
+    if (transform && !this.overlayOpen) {
+      if (this.globe) this.setGlobe(false);
+      this.startTransform();
     }
 
-    if (hop && !this.overlayOpen) {
+    if (hop && !this.overlayOpen && this.player.form === 'robot') {
       this.audio.start();
       if (this.globe) this.setGlobe(false);
-      if (!this.airborne && !this.boating) {
+      if (!this.airborne) {
         this.hopV = HOP_VELOCITY;
         this.airborne = true;
         this.audio.hop();
@@ -870,12 +842,11 @@ export class Game {
 
     if (interact && !this.overlayOpen && !this.globe) {
       const gem = this.nearestGem();
-      const byShip = !gem && !this.boating && this.ship.visible && this.shipDir.angleTo(this.dir) * PLANET_RADIUS < INTERACT_RANGE + 0.8;
+      const byShip = !gem && this.ship.visible && this.shipDir.angleTo(this.dir) * PLANET_RADIUS < INTERACT_RANGE + 0.8;
       const pal = gem || byShip ? null : this.nearestCritter();
       if (gem) this.findWonder(gem);
       else if (byShip) this.useShip();
       else if (pal) this.petCritter(pal);
-      else if (!this.boating && this.launchTarget()) this.launchBoat();
     }
 
     if (this.globe && !this.intro && (input.moveX !== 0 || input.moveY !== 0)) this.setGlobe(false);
@@ -889,83 +860,17 @@ export class Game {
       this.updateFlight(dt);
       return;
     }
-    if (this.boating) {
-      this.updateBoat(dt);
-      this.updateBiome(dt);
-      return;
-    }
-    const up = this.dir;
-    let moving = false;
-    let speed = WALK_SPEED;
-    const desired = _v1;
 
-    const mx = this.overlayOpen ? 0 : this.input.moveX;
-    const my = this.overlayOpen ? 0 : this.input.moveY;
-    if (mx !== 0 || my !== 0) {
-      this.walkTarget = null;
-      this.targetRing.visible = false;
-      _v2.crossVectors(this.camForward, up).normalize(); // camera right
-      desired.copy(this.camForward).multiplyScalar(my).addScaledVector(_v2, mx);
-      desired.addScaledVector(up, -desired.dot(up));
-      if (desired.lengthSq() > 1e-6) {
-        desired.normalize();
-        moving = true;
-        speed = this.input.run ? RUN_SPEED : WALK_SPEED;
-      }
-    } else if (this.walkTarget) {
-      desired.copy(this.walkTarget).addScaledVector(up, -this.walkTarget.dot(up));
-      const remaining = up.angleTo(this.walkTarget) * PLANET_RADIUS;
-      if (remaining < 0.3 || desired.lengthSq() < 1e-8) {
-        this.walkTarget = null;
-        this.targetRing.visible = false;
-      } else {
-        desired.normalize();
-        moving = true;
-        speed = remaining > 7 ? RUN_SPEED : WALK_SPEED;
+    this.updateDrive(dt);
+
+    if (this.transformTime > 0) {
+      this.transformTime = Math.max(0, this.transformTime - dt);
+      if (!this.transformSwapped && this.transformTime <= TRANSFORM_TIME / 2) {
+        this.transformSwapped = true;
+        this.swapForm();
       }
     }
-
-    if (moving && !this.globe) {
-      this.heading.lerp(desired, Math.min(1, dt * TURN_RATE));
-      this.heading.addScaledVector(up, -this.heading.dot(up)).normalize();
-      const ang = (speed * dt) / PLANET_RADIUS;
-      const cos = Math.cos(ang);
-      const sin = Math.sin(ang);
-      const before = this.walkTarget ? up.angleTo(this.walkTarget) : 0;
-      _v2.copy(up).multiplyScalar(cos).addScaledVector(this.heading, sin).normalize();
-      if (isOcean(_v2)) {
-        // The shore is the edge of the walkable world; the boat crosses the water.
-        moving = false;
-        this.stuckTime += dt;
-      } else {
-        this.colliders.resolve(_v2, PLAYER_RADIUS);
-        up.copy(_v2);
-        this.heading.addScaledVector(up, -this.heading.dot(up)).normalize();
-        this.camForward.addScaledVector(up, -this.camForward.dot(up)).normalize();
-        this.journal.paces += speed * dt;
-        this.journalDirty = true;
-        if (this.journal.paces >= 1000) this.award('wanderer');
-        if (this.walkTarget) {
-          // Give up on a click target that an obstacle keeps us from reaching.
-          const progress = before - up.angleTo(this.walkTarget);
-          this.stuckTime = progress > ang * 0.2 ? 0 : this.stuckTime + dt;
-        }
-      }
-      if (this.walkTarget && this.stuckTime > STUCK_TIMEOUT) {
-        this.walkTarget = null;
-        this.targetRing.visible = false;
-        this.stuckTime = 0;
-      }
-    } else {
-      moving = false;
-      this.stuckTime = 0;
-    }
-
-    const targetAnim = moving ? speed / RUN_SPEED : 0;
-    this.animSpeed += (targetAnim - this.animSpeed) * Math.min(1, dt * 10);
-    // A step, a hop, or simply time cancels the crouch over an animal.
-    if (moving || this.airborne) this.petTime = 0;
-    else if (this.petTime > 0) this.petTime -= dt;
+    this.burst.update(dt);
 
     if (this.airborne) {
       this.hopH += this.hopV * dt;
@@ -977,18 +882,116 @@ export class Game {
       }
     }
 
-    this.character.update(dt, this.animSpeed, this.airborne, this.time, false, this.petTime > 0);
+    const vehicle = this.player.form === 'vehicle';
+    const speed01 = Math.min(1, Math.abs(this.moveSpeed) / (vehicle ? VEH_SPEED : RUN_SPEED));
+    this.player.update(dt, {
+      speed: this.moveSpeed,
+      speed01,
+      airborne: this.airborne,
+      steer: this.steer,
+      time: this.time
+    });
     // One footstep per foot landing, so the sound lands with the boot.
-    if (this.character.footStrike && !this.airborne) this.audio.step(this.animSpeed > 0.75);
-    this.placeCharacter();
+    if (this.player.footStrike && !this.airborne) this.audio.step(speed01 > 0.75);
+    this.placePlayer();
     this.updateBiome(dt);
-    if (moving) {
+    if (Math.abs(this.moveSpeed) > 0.2) {
       this.pickUpShard();
       this.pickUpPart();
     }
   }
 
-  /** Collect a shard the explorer has walked onto. */
+  /**
+   * Throttle and steer along the machine's own heading. The robot walks and
+   * turns on the spot; the vehicle builds speed with inertia, coasts when the
+   * throttle is released, and turns more widely the faster it goes.
+   */
+  private updateDrive(dt: number): void {
+    const up = this.dir;
+    const vehicle = this.player.form === 'vehicle';
+    const mx = this.overlayOpen || this.globe ? 0 : this.input.moveX;
+    const my = this.overlayOpen || this.globe ? 0 : this.input.moveY;
+    const run = this.input.run;
+    this.steer = mx;
+
+    let target: number;
+    if (vehicle) {
+      const top = run ? VEH_BOOST : VEH_SPEED;
+      target = my * (my < 0 ? top * VEH_REVERSE : top);
+      const rate = Math.abs(target) > Math.abs(this.moveSpeed) ? VEH_ACCEL : VEH_COAST;
+      this.moveSpeed += (target - this.moveSpeed) * Math.min(1, dt * rate);
+      if (target === 0 && Math.abs(this.moveSpeed) < 0.03) this.moveSpeed = 0;
+    } else {
+      target = my * (run ? RUN_SPEED : WALK_SPEED);
+      this.moveSpeed += (target - this.moveSpeed) * Math.min(1, dt * 14);
+      if (target === 0 && Math.abs(this.moveSpeed) < 0.03) this.moveSpeed = 0;
+    }
+
+    if (mx !== 0) {
+      let turnRate: number;
+      if (vehicle) {
+        // The rudder bites in proportion to speed, and swings wider at the top.
+        const bite = 0.32 + 0.68 * Math.min(1, Math.abs(this.moveSpeed) / (VEH_SPEED * 0.7));
+        turnRate = VEH_TURN * bite * (1 - 0.3 * Math.min(1, Math.abs(this.moveSpeed) / VEH_SPEED));
+        // Reversing steers the other way, the way a car does.
+        if (this.moveSpeed < -0.05) turnRate = -turnRate;
+      } else {
+        turnRate = ROBOT_TURN;
+      }
+      _q.setFromAxisAngle(up, mx * turnRate * dt);
+      this.heading.applyQuaternion(_q);
+      this.heading.addScaledVector(up, -this.heading.dot(up)).normalize();
+    }
+
+    if (Math.abs(this.moveSpeed) > 0.01 && !this.globe) {
+      const ang = (this.moveSpeed * dt) / PLANET_RADIUS;
+      _v2.copy(up).multiplyScalar(Math.cos(ang)).addScaledVector(this.heading, Math.sin(ang)).normalize();
+      if (isOcean(_v2)) {
+        // The energy channels are out of bounds; the machine stops at the edge.
+        this.moveSpeed *= vehicle ? 0.4 : 0.15;
+        if (Math.abs(this.moveSpeed) < 0.15) this.moveSpeed = 0;
+      } else {
+        this.colliders.resolve(_v2, vehicle ? VEHICLE_RADIUS : PLAYER_RADIUS);
+        up.copy(_v2);
+        this.heading.addScaledVector(up, -this.heading.dot(up)).normalize();
+        this.camForward.addScaledVector(up, -this.camForward.dot(up)).normalize();
+        this.journal.paces += Math.abs(this.moveSpeed) * dt;
+        this.journalDirty = true;
+        if (this.journal.paces >= 1000) this.award('wanderer');
+      }
+    }
+  }
+
+  /** Start the transform: the burst plays, the sound fires, the model swaps midway. */
+  private startTransform(): void {
+    if (this.transformTime > 0 || this.globe || this.overlayOpen) return;
+    this.audio.start();
+    this.transformTime = TRANSFORM_TIME;
+    this.transformSwapped = false;
+    this.shake = 0.4;
+    this.audio.transform();
+    this.burst.play(this.player.root.position, this.player.root.quaternion);
+  }
+
+  private swapForm(): void {
+    const next: Form = this.player.form === 'robot' ? 'vehicle' : 'robot';
+    this.player.setForm(next);
+    if (next === 'robot') {
+      // A robot that just landed cannot still be rolling at boost speed.
+      this.moveSpeed = THREE.MathUtils.clamp(this.moveSpeed, -RUN_SPEED * 0.5, RUN_SPEED);
+      this.airborne = false;
+      this.hopH = 0;
+      this.hopV = 0;
+    }
+    this.publishControl();
+  }
+
+  /** Tell the on-screen badge who is being driven and in which form. */
+  private publishControl(): void {
+    controlState.set({ name: this.player.name, form: this.player.form, isHero: this.player.scheme === 'hero' });
+  }
+
+  /** Collect a shard the walker has driven onto. */
   private pickUpShard(): void {
     const idx = this.shards.collect(this.dir);
     if (idx < 0) return;
@@ -1008,7 +1011,7 @@ export class Game {
       });
     }
     if (this.shards.foundCount >= this.shards.total) {
-      this.fireworks.celebrate(this.character.group.position, 4.5);
+      this.fireworks.celebrate(this.player.root.position, 4.5);
       this.award('starfall');
     }
     this.flushJournal(true);
@@ -1026,7 +1029,9 @@ export class Game {
     const complete = this.shipProgress.parts.length >= SHIP_PARTS.length;
     this.callbacks.onSpaceNotice({
       kicker: complete ? 'Starship ready' : 'Part recovered',
-      text: complete ? `${SHIP_PARTS[idx]} found · return to the landing pad` : `${SHIP_PARTS[idx]} · ${this.shipProgress.parts.length}/${SHIP_PARTS.length}`
+      text: complete
+        ? `${SHIP_PARTS[idx]} found · return to the landing pad`
+        : `${SHIP_PARTS[idx]} · ${this.shipProgress.parts.length}/${SHIP_PARTS.length}`
     });
     this.promptId = null;
   }
@@ -1052,150 +1057,16 @@ export class Game {
       this.weather.setFireflies(b.id === 'river');
       this.audio.setWeather(weather === 'rain' ? 'rain' : weather === 'snow' || weather === 'leaves' ? 'wind' : weather === 'embers' ? 'ember' : null);
     }
-    this.launchDir = this.boating || this.globe ? null : findLaunchPoint(this.dir);
   }
 
-  private placeCharacter(): void {
-    const g = this.character.group;
-    if (this.boating) {
-      g.position.copy(this.boat.position).add(_v3.copy(BOAT_SEAT).applyQuaternion(this.boat.quaternion));
-      g.quaternion.copy(this.boat.quaternion);
-      return;
-    }
+  /** Stand the machine on the surface at `dir`, facing `heading`. */
+  private placePlayer(): void {
+    const g = this.player.root;
     const r = walkRadius(this.dir) + this.hopH;
     g.position.copy(this.dir).multiplyScalar(r);
     _v2.crossVectors(this.dir, this.heading).normalize();
     _m.makeBasis(_v2, this.dir, this.heading);
     g.quaternion.setFromRotationMatrix(_m);
-  }
-
-  // ---------------------------------------------------------------- boat
-
-  /** Water the player could launch into right now: the docked boat if it is close, else open shore. */
-  private launchTarget(): THREE.Vector3 | null {
-    return null;
-  }
-
-  private launchBoat(): void {
-    const target = this.launchTarget();
-    if (!target) return;
-    this.audio.start();
-    this.exitIntro();
-    if (this.globe) this.setGlobe(false);
-    // Face away from the shore we are leaving.
-    this.boatHeading.copy(target).sub(this.dir);
-    this.boatDir.copy(target);
-    this.boatHeading.addScaledVector(this.boatDir, -this.boatHeading.dot(this.boatDir));
-    if (this.boatHeading.lengthSq() < 1e-6) this.boatHeading.copy(this.heading);
-    this.boatHeading.addScaledVector(this.boatDir, -this.boatHeading.dot(this.boatDir)).normalize();
-    this.dir.copy(this.boatDir);
-    this.heading.copy(this.boatHeading);
-    this.camForward.addScaledVector(this.dir, -this.camForward.dot(this.dir)).normalize();
-    this.boatSpeed = 0;
-    this.boatPlaced = true;
-    this.boating = true;
-    this.boat.visible = true;
-    this.hopH = 0;
-    this.hopV = 0;
-    this.airborne = false;
-    this.walkTarget = null;
-    this.targetRing.visible = false;
-    this.launchDir = null;
-    this.audio.hop();
-    this.placeBoat();
-    this.placeCharacter();
-    // A companion waits on the shore; the boat only seats one.
-    this.companion?.release();
-    this.companion = null;
-    this.award('sailor');
-  }
-
-  /** Step ashore at `land`, leaving the boat afloat where it is. */
-  private dock(land: THREE.Vector3): void {
-    this.dir.copy(land);
-    this.colliders.resolve(this.dir, PLAYER_RADIUS);
-    this.heading.copy(this.boatHeading).addScaledVector(this.dir, -this.boatHeading.dot(this.dir)).normalize();
-    this.camForward.addScaledVector(this.dir, -this.camForward.dot(this.dir)).normalize();
-    this.boating = false;
-    this.boatSpeed = 0;
-    this.stuckTime = 0;
-    this.biomeTimer = 0;
-    this.audio.hop();
-  }
-
-  private updateBoat(dt: number): void {
-    const up = this.dir;
-    const desired = _v1;
-    let steering = false;
-    let run = false;
-
-    const mx = this.overlayOpen ? 0 : this.input.moveX;
-    const my = this.overlayOpen ? 0 : this.input.moveY;
-    if (mx !== 0 || my !== 0) {
-      this.walkTarget = null;
-      this.targetRing.visible = false;
-      _v2.crossVectors(this.camForward, up).normalize();
-      desired.copy(this.camForward).multiplyScalar(my).addScaledVector(_v2, mx);
-      desired.addScaledVector(up, -desired.dot(up));
-      if (desired.lengthSq() > 1e-6) {
-        desired.normalize();
-        steering = true;
-        run = this.input.run;
-      }
-    } else if (this.walkTarget) {
-      desired.copy(this.walkTarget).addScaledVector(up, -this.walkTarget.dot(up));
-      const remaining = up.angleTo(this.walkTarget) * PLANET_RADIUS;
-      if (remaining < 0.8 || desired.lengthSq() < 1e-8) {
-        this.walkTarget = null;
-        this.targetRing.visible = false;
-      } else {
-        desired.normalize();
-        steering = true;
-        run = remaining > 12;
-      }
-    }
-
-    const targetSpeed = steering && !this.globe ? BOAT_SPEED * (run ? BOAT_RUN : 1) : 0;
-    this.boatSpeed += (targetSpeed - this.boatSpeed) * Math.min(1, dt * (steering ? BOAT_ACCEL : BOAT_DRAG));
-    if (steering && !this.globe) {
-      // Only a moving hull answers the rudder.
-      const bite = 0.35 + 0.65 * Math.min(1, this.boatSpeed / BOAT_SPEED);
-      this.boatHeading.lerp(desired, Math.min(1, dt * BOAT_TURN * bite));
-      this.boatHeading.addScaledVector(up, -this.boatHeading.dot(up)).normalize();
-    }
-
-    if (this.boatSpeed > 0.05) {
-      const ang = (this.boatSpeed * dt) / PLANET_RADIUS;
-      _v2.copy(up).multiplyScalar(Math.cos(ang)).addScaledVector(this.boatHeading, Math.sin(ang)).normalize();
-      if (!isOcean(_v2)) {
-        this.dock(_v2);
-        this.character.update(dt, 0, false, this.time);
-        this.placeCharacter();
-        return;
-      }
-      up.copy(_v2);
-      this.boatDir.copy(up);
-      this.boatHeading.addScaledVector(up, -this.boatHeading.dot(up)).normalize();
-      this.camForward.addScaledVector(up, -this.camForward.dot(up)).normalize();
-    }
-
-    this.animSpeed += (0 - this.animSpeed) * Math.min(1, dt * 10);
-    this.character.update(dt, 0, false, this.time, true);
-    this.placeBoat();
-    this.placeCharacter();
-  }
-
-  /** Sit the boat on the water at `boatDir`, bobbing gently, whether crewed or docked. */
-  private placeBoat(): void {
-    const t = this.time;
-    const g = this.boat;
-    const way = Math.min(1, this.boatSpeed / BOAT_SPEED);
-    g.position.copy(this.boatDir).multiplyScalar(SEA_LEVEL - 0.02 + Math.sin(t * 1.7) * 0.04);
-    _v2.crossVectors(this.boatDir, this.boatHeading).normalize();
-    _m.makeBasis(_v2, this.boatDir, this.boatHeading);
-    g.quaternion.setFromRotationMatrix(_m);
-    _e.set(Math.sin(t * 1.3) * 0.025 - way * 0.04, 0, Math.sin(t * 1.9) * 0.05);
-    g.quaternion.multiply(_q.setFromEuler(_e));
   }
 
   // ---------------------------------------------------------------- camera
@@ -1217,12 +1088,23 @@ export class Game {
       if (Math.abs(this.globePitch) > 1.0) desiredUp.set(Math.sin(this.globeYaw), 0, Math.cos(this.globeYaw)).multiplyScalar(-Math.sign(this.globePitch));
     } else {
       const up = this.dir;
-      const playerPos = this.character.group.position;
+      const playerPos = this.player.root.position;
+      // Trail behind the machine's own heading. A drag holds the offset for a
+      // moment before it recentres, so looking around still feels free.
+      this.orbitHold = Math.max(0, this.orbitHold - dt);
+      if (this.orbitHold === 0) {
+        const k = 1 - Math.exp(-dt * (this.player.form === 'vehicle' ? 2.4 : 4.2));
+        this.camForward.lerp(this.heading, k);
+        this.camForward.addScaledVector(this.dir, -this.camForward.dot(this.dir));
+        if (this.camForward.lengthSq() > 1e-8) this.camForward.normalize();
+      }
+      const vehicle = this.player.form === 'vehicle';
+      const dist = this.camDist * (vehicle ? 1.12 : 1);
       desiredPos
         .copy(playerPos)
-        .addScaledVector(up, Math.sin(this.camPitch) * this.camDist + 0.9)
-        .addScaledVector(this.camForward, -Math.cos(this.camPitch) * this.camDist);
-      desiredLook.copy(playerPos).addScaledVector(up, 1.3);
+        .addScaledVector(up, Math.sin(this.camPitch) * dist + 0.9)
+        .addScaledVector(this.camForward, -Math.cos(this.camPitch) * dist);
+      desiredLook.copy(playerPos).addScaledVector(up, vehicle ? 1 : 1.35);
       desiredUp.copy(up);
     }
 
@@ -1233,6 +1115,14 @@ export class Game {
     this.camLook.lerp(desiredLook, k);
     this.camUp.lerp(desiredUp, k).normalize();
     this.camera.position.copy(this.camPos);
+    if (this.shake > 0) {
+      // A short jolt on the transform, fading as the square of what is left.
+      this.shake = Math.max(0, this.shake - dt * 1.8);
+      const a = this.shake * this.shake * 2.6;
+      this.camera.position.x += (Math.random() - 0.5) * a;
+      this.camera.position.y += (Math.random() - 0.5) * a;
+      this.camera.position.z += (Math.random() - 0.5) * a;
+    }
     this.camera.up.copy(this.camUp);
     this.camera.lookAt(this.camLook);
     this.camera.updateMatrixWorld();
@@ -1246,7 +1136,7 @@ export class Game {
     const back = _v3.setFromMatrixColumn(this.camera.matrixWorld, 2);
     const lift = 0.3 + NIGHT.moonHeight * 0.65;
     const moonDir = right.multiplyScalar(-1.15).addScaledVector(camUp, lift).addScaledVector(back, 0.6).normalize();
-    const focus = this.flying ? _v4.copy(this.ship.position) : this.globe ? _v4.set(0, 0, 0) : _v4.copy(this.character.group.position);
+    const focus = this.flying ? _v4.copy(this.ship.position) : this.globe ? _v4.set(0, 0, 0) : _v4.copy(this.player.root.position);
     this.snapShadowFocus(focus, moonDir);
     this.moonLight.target.position.copy(focus);
     this.moonLight.position.copy(focus).addScaledVector(moonDir, 140);
@@ -1271,7 +1161,7 @@ export class Game {
     this.weather.setHidden(this.globe || this.flying);
     this.weather.update(dt, t, this.dir);
     // Rain darkens the ground it falls on and snow settles on whatever faces the sky.
-    this.fx.setCenter(this.character.group.position);
+    this.fx.setCenter(this.player.root.position);
     this.fx.setWet(this.weather.rainLevel);
     this.fx.setSnow(this.weather.snowLevel);
     this.aurora.update(dt, t);
@@ -1293,10 +1183,6 @@ export class Game {
     }
     if (this.companion && !this.companion.following) this.companion = null;
     this.flushJournal(false, dt);
-    if (this.boatPlaced) {
-      if (!this.boating) this.placeBoat();
-      this.wake.update(dt, this.boatDir, this.boatHeading, this.boating ? this.boatSpeed : 0);
-    }
 
     for (let i = 0; i < this.gems.length; i++) {
       const g = this.gems[i];
@@ -1312,13 +1198,8 @@ export class Game {
       g.light.intensity = 15 * pulse;
     }
 
-    if (this.targetRing.visible) {
-      const s = 1 + Math.sin(t * 6) * 0.12;
-      this.targetRing.scale.set(s, s, s);
-    }
-
     // Hand the pooled lights to whichever sources are nearest the active traveller.
-    this.lights.update(t, this.flying ? this.ship.position : this.character.group.position);
+    this.lights.update(t, this.flying ? this.ship.position : this.player.root.position);
   }
 
   /**
@@ -1570,7 +1451,7 @@ export class Game {
     this.audio.start();
     this.exitIntro();
     // A second pat wins the animal over: it tags along for a while.
-    const befriend = c.petted && !c.following && !this.boating;
+    const befriend = c.petted && !c.following;
     c.pet(this.dir);
     if (befriend) {
       if (this.companion && this.companion !== c) this.companion.release();
@@ -1585,10 +1466,7 @@ export class Game {
     }
     this.hearts.burst(c.group.position, c.dir, 3);
     this.audio.pet();
-    // The rowing pose wins over the crouch, so skip it when afloat.
-    this.petTime = this.boating ? 0 : PET_POSE;
-    this.walkTarget = null;
-    this.targetRing.visible = false;
+    this.moveSpeed = 0;
     // Face the animal.
     _v1.copy(c.dir).addScaledVector(this.dir, -c.dir.dot(this.dir));
     if (_v1.lengthSq() > 1e-6) this.heading.copy(_v1).normalize();
@@ -1599,7 +1477,7 @@ export class Game {
     const idle = this.globe || this.flying || this.overlayOpen || this.photo;
     const gem = idle ? null : this.nearestGem();
     const byShip =
-      !idle && !gem && !this.boating && this.ship.visible && this.shipDir.angleTo(this.dir) * PLANET_RADIUS < INTERACT_RANGE + 0.8;
+      !idle && !gem && this.ship.visible && this.shipDir.angleTo(this.dir) * PLANET_RADIUS < INTERACT_RANGE + 0.8;
     const pal = idle || gem || byShip ? null : this.nearestCritter();
     let prompt: Prompt | null = null;
     if (gem) {
@@ -1625,9 +1503,6 @@ export class Game {
         found: false,
         kicker: pal.following ? 'Your companion' : pal.petted ? 'Pet again to make a friend' : 'A curious animal'
       };
-    } else if (!idle && !this.boating && this.launchTarget()) {
-      const reuse = this.launchTarget() === this.boatDir;
-      prompt = { id: reuse ? 'boat-board' : 'boat-launch', action: reuse ? 'Board the boat' : 'Launch a boat', found: false, kicker: 'The shallows' };
     }
     const id = prompt?.id ?? null;
     if (id === this.promptId) return;
@@ -1649,7 +1524,7 @@ export class Game {
       (gem.ring.material as THREE.MeshBasicMaterial).color.setHex(0xffd166);
       this.promptId = null; // re-emit the prompt with found = true
       if (this.found.length >= WONDERS.length) {
-        this.fireworks.celebrate(this.character.group.position, 8);
+        this.fireworks.celebrate(this.player.root.position, 8);
         this.award('wonders');
       }
     }

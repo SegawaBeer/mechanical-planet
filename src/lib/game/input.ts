@@ -3,6 +3,8 @@
 
 export type Click = { x: number; y: number };
 
+// Tank layout: up/down drive forward and back along the robot's own heading,
+// left/right turn that heading.
 const MOVE_KEYS: Record<string, [number, number]> = {
   KeyW: [0, 1],
   ArrowUp: [0, 1],
@@ -26,6 +28,8 @@ export class Input {
   private keys = new Set<string>();
   private hopQueued = false;
   private interactQueued = false;
+  private transformQueued = false;
+  private heroQueued = false;
   private globeQueued = false;
   private helpQueued = false;
   private photoQueued = false;
@@ -92,6 +96,15 @@ export class Input {
     this.hopQueued = true;
     this.fireAny();
   }
+  /** Swap between robot and vehicle form (touch button or F key). */
+  queueTransform(): void {
+    this.transformQueued = true;
+    this.fireAny();
+  }
+  /** Hand control back to the protagonist (touch button or Tab). */
+  queueHeroReturn(): void {
+    this.heroQueued = true;
+  }
   queueInteract(): void {
     this.interactQueued = true;
   }
@@ -109,6 +122,16 @@ export class Input {
     this.fireAny();
   }
 
+  consumeTransform(): boolean {
+    const v = this.transformQueued;
+    this.transformQueued = false;
+    return v;
+  }
+  consumeHeroReturn(): boolean {
+    const v = this.heroQueued;
+    this.heroQueued = false;
+    return v;
+  }
   consumeHop(): boolean {
     const v = this.hopQueued;
     this.hopQueued = false;
@@ -179,6 +202,12 @@ export class Input {
       this.journalQueued = true;
       return;
     }
+    if (e.code === 'Tab') {
+      // Tab would otherwise move focus to the page chrome.
+      e.preventDefault();
+      if (!e.repeat) this.heroQueued = true;
+      return;
+    }
     if (!this.enabled) return;
     if (e.code in MOVE_KEYS) {
       e.preventDefault();
@@ -198,6 +227,9 @@ export class Input {
       case 'KeyE':
       case 'Enter':
         if (!e.repeat) this.interactQueued = true;
+        break;
+      case 'KeyF':
+        if (!e.repeat) this.transformQueued = true;
         break;
       case 'KeyM':
         if (!e.repeat) this.globeQueued = true;

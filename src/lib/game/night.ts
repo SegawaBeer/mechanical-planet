@@ -29,13 +29,14 @@ export type NightLighting = {
  * shadows. `sky` is the one to lift if the stars start to feel lost.
  */
 export const NIGHT: NightLighting = {
-  sky: new THREE.Color(0x16243f),
-  hemiSky: new THREE.Color(0x4a6c9e),
-  hemiGround: new THREE.Color(0x1e2a34),
-  hemiIntensity: 0.86,
-  moon: new THREE.Color(0xaecbf5),
-  moonIntensity: 1.15,
-  moonHeight: 0.62,
-  water: new THREE.Color(0x256a8c),
-  rim: new THREE.Color(0x6f9ad9)
+  // A dusky, industrial dusk: teal-indigo overhead, warm haze near the ground.
+  sky: new THREE.Color(0x14262f),
+  hemiSky: new THREE.Color(0x3e6e78),
+  hemiGround: new THREE.Color(0x3a2c22),
+  hemiIntensity: 0.9,
+  moon: new THREE.Color(0xffd6a8),
+  moonIntensity: 1.0,
+  moonHeight: 0.42,
+  water: new THREE.Color(0x1f6f7e),
+  rim: new THREE.Color(0xe8a463)
 };

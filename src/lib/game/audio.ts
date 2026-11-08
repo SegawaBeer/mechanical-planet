@@ -577,6 +577,68 @@ export class Ambience {
     osc.stop(now + 0.2);
   }
 
+  /** Mechanical transformation: a servo sweep, ratcheting plate clanks, a heavy lock. */
+  transform(): void {
+    const ctx = this.ctx;
+    if (!ctx || !this.master || this.muted) return;
+    const now = ctx.currentTime;
+
+    // Servo whine climbing then falling away under a closing filter.
+    const servo = ctx.createOscillator();
+    servo.type = 'sawtooth';
+    servo.frequency.setValueAtTime(88, now);
+    servo.frequency.exponentialRampToValueAtTime(260, now + 0.34);
+    servo.frequency.exponentialRampToValueAtTime(70, now + 0.96);
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(520, now);
+    filter.frequency.exponentialRampToValueAtTime(1800, now + 0.34);
+    filter.frequency.exponentialRampToValueAtTime(320, now + 0.96);
+    const sg = ctx.createGain();
+    sg.gain.setValueAtTime(0.0001, now);
+    sg.gain.linearRampToValueAtTime(0.05, now + 0.06);
+    sg.gain.exponentialRampToValueAtTime(0.0008, now + 1);
+    servo.connect(filter).connect(sg).connect(this.master);
+    servo.start(now);
+    servo.stop(now + 1.02);
+
+    // Plates slamming over each other: tight metallic noise bursts.
+    for (let i = 0; i < 5; i++) {
+      const t0 = now + 0.05 + i * 0.17;
+      const len = 0.07;
+      const buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * len), ctx.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let k = 0; k < data.length; k++) {
+        const t = k / data.length;
+        data[k] = (Math.random() * 2 - 1) * Math.pow(1 - t, 3);
+      }
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      const band = ctx.createBiquadFilter();
+      band.type = 'bandpass';
+      band.frequency.value = 1500 + Math.random() * 2200;
+      band.Q.value = 3.2;
+      const g = ctx.createGain();
+      g.gain.value = 0.09;
+      src.connect(band).connect(g).connect(this.master);
+      if (this.reverbSend) g.connect(this.reverbSend);
+      src.start(t0);
+    }
+
+    // The final lock: a low thunk as the form settles.
+    const thunk = ctx.createOscillator();
+    thunk.type = 'sine';
+    thunk.frequency.setValueAtTime(120, now + 0.72);
+    thunk.frequency.exponentialRampToValueAtTime(42, now + 1.02);
+    const tg = ctx.createGain();
+    tg.gain.setValueAtTime(0.0001, now);
+    tg.gain.setValueAtTime(0.13, now + 0.72);
+    tg.gain.exponentialRampToValueAtTime(0.001, now + 1.05);
+    thunk.connect(tg).connect(this.master);
+    thunk.start(now + 0.7);
+    thunk.stop(now + 1.07);
+  }
+
   dispose(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;

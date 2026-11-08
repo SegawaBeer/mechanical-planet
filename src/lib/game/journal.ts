@@ -16,22 +16,9 @@ export function biomeJournalKey(seed: string, biome: BiomeId): string {
   return seed === 'earth' ? biome : `${seed}:${biome}`;
 }
 
-/** Earth's species, retained as the homeworld field-guide page. */
-export const SPECIES = [
-  'sheep',
-  'goat',
-  'polar bear',
-  'penguin',
-  'fox',
-  'rabbit',
-  'deer',
-  'crab',
-  'turtle',
-  'duck',
-  'frog',
-  'fennec fox',
-  'jackrabbit'
-] as const;
+/** The planet's mechanical wildlife. `Critter` records the model's own name,
+ *  so these strings have to match the names the game spawns. */
+export const SPECIES = ['robot deer'] as const;
 
 type AlienArchetype = Exclude<PlanetArchetype, 'earth'>;
 
@@ -67,16 +54,16 @@ export type MilestoneId =
 export type Milestone = { id: MilestoneId; title: string; blurb: string };
 
 export const MILESTONES: Milestone[] = [
-  { id: 'wonders', title: 'Every small wonder', blurb: 'Found all seven wonders on one planet.' },
-  { id: 'cartographer', title: 'Cartographer', blurb: 'Set foot in every biome, and the sea between them.' },
-  { id: 'zoologist', title: 'Friend to all', blurb: 'Petted every kind of animal on the planet.' },
-  { id: 'friend', title: 'A friend for the road', blurb: 'An animal liked you enough to follow you.' },
-  { id: 'sailor', title: 'Sailor', blurb: 'Launched a boat and left the shore behind.' },
-  { id: 'stargazer', title: 'Stargazer', blurb: 'Caught a shooting star crossing the sky.' },
-  { id: 'starfall', title: 'Starfall', blurb: 'Gathered every starlight shard on one planet.' },
-  { id: 'wanderer', title: 'Wanderer', blurb: 'Walked a thousand paces.' },
-  { id: 'grasshopper', title: 'Grasshopper', blurb: 'Hopped a hundred times.' },
-  { id: 'traveller', title: 'Traveller', blurb: 'Visited three different planets.' }
+  { id: 'wonders', title: '信标全亮', blurb: '点亮一颗星球上的全部信标。' },
+  { id: 'cartographer', title: '测绘者', blurb: '踏遍每一个区域，以及区域之间的能量河道。' },
+  { id: 'zoologist', title: '众生之友', blurb: '摸过星球上的每一种机器动物。' },
+  { id: 'friend', title: '同行者', blurb: '有一只机器动物愿意跟着你走。' },
+  { id: 'sailor', title: '渡河人', blurb: '放下小艇，离开河岸。' },
+  { id: 'stargazer', title: '观星者', blurb: '看见一颗划过天空的流星。' },
+  { id: 'starfall', title: '晶块归位', blurb: '收集一颗星球上全部的能量晶块。' },
+  { id: 'wanderer', title: '远行者', blurb: '走过一千步。' },
+  { id: 'grasshopper', title: '跳跃者', blurb: '跳一百次。' },
+  { id: 'traveller', title: '星际旅人', blurb: '去过三颗不同的星球。' }
 ];
 
 export type Journal = {

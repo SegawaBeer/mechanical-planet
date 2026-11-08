@@ -10,19 +10,19 @@
 <div class="photo">
   <p class="hint" aria-live="polite">
     {#if isTouch}
-      Photo mode · use the corner buttons to save or leave
+      拍照模式 · 用角落按钮保存或退出
     {:else}
-      Photo mode · <kbd>P</kbd> or <kbd>Esc</kbd> to leave
+      拍照模式 · 按 <kbd>P</kbd> 或 <kbd>Esc</kbd> 退出
     {/if}
   </p>
 
   <div class="tools">
-    <button class="round" on:click={() => dispatch('save')} disabled={saving} aria-label="Save a picture" title="Save a picture">
+    <button class="round" on:click={() => dispatch('save')} disabled={saving} aria-label="保存图片" title="保存图片">
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 18.5h14" />
       </svg>
     </button>
-    <button class="round" on:click={() => dispatch('exit')} aria-label="Leave photo mode" title="Leave photo mode (P)">
+    <button class="round" on:click={() => dispatch('exit')} aria-label="退出拍照模式" title="退出拍照模式 (P)">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
     </button>
   </div>

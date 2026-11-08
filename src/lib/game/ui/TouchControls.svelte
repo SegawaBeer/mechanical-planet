@@ -2,7 +2,7 @@
   import { createEventDispatcher } from 'svelte';
   export let flying = false;
 
-  const dispatch = createEventDispatcher<{ move: { x: number; y: number }; hop: void; run: { active: boolean } }>();
+  const dispatch = createEventDispatcher<{ move: { x: number; y: number }; hop: void; run: { active: boolean }; transform: void; hero: void }>();
 
   const RADIUS = 44;
   let zone: HTMLDivElement;
@@ -76,19 +76,42 @@
     <div class="knob" style="transform: translate({knobX}px, {knobY}px)"></div>
   </div>
 
+  {#if !flying}
+    <div class="extra">
+      <button class="btn small" on:click={() => dispatch('transform')} aria-label="变形">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 4v10l-7 4-7-4V7zM5 7l7 4 7-4M12 11v10" /></svg>
+        <span>变形</span>
+      </button>
+      <button class="btn small" on:click={() => dispatch('hero')} aria-label="回到主角">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="7" r="3" /><path d="M5 21v-3a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v3" /></svg>
+        <span>主角</span>
+      </button>
+    </div>
+  {/if}
+
   <div class="buttons">
-    <button class="btn" class:on={running} on:click={toggleRun} aria-label={flying ? 'Toggle flight boost' : 'Toggle run'} aria-pressed={running}>
+    <button class="btn" class:on={running} on:click={toggleRun} aria-label={flying ? '切换加速' : '切换奔跑'} aria-pressed={running}>
       {#if flying}
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 4 6-1 7H9L8 9zM9 16l-2 4 5-2 5 2-2-4" /></svg>
-        <span>boost</span>
+        <span>加速</span>
       {:else}
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 4l-1 5 4 2-2 5-3-1-3 5M14 3.5a1 1 0 1 0 2 0 1 1 0 1 0-2 0" /></svg>
-        <span>run</span>
+        <span>奔跑</span>
       {/if}
     </button>
-    <button class="btn big" on:pointerdown|preventDefault={() => dispatch('hop')} aria-label={flying ? 'Land on the current planet' : 'Hop'}>
+    {#if !flying}
+      <button class="btn" on:click={() => dispatch('transform')} aria-label="变形">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 4v10l-7 4-7-4V7zM5 7l7 4 7-4M12 11v10" /></svg>
+        <span>变形</span>
+      </button>
+      <button class="btn" on:click={() => dispatch('hero')} aria-label="回到主角">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="7" r="3" /><path d="M5 21v-3a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v3" /></svg>
+        <span>主角</span>
+      </button>
+    {/if}
+    <button class="btn big" on:pointerdown|preventDefault={() => dispatch('hop')} aria-label={flying ? '降落到当前星球' : '跳跃'}>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d={flying ? 'M5 15h14M7 11l5 4 5-4M12 15V4' : 'M12 19V6M6 12l6-6 6 6'} /></svg>
-      <span>{flying ? 'land' : 'hop'}</span>
+      <span>{flying ? '降落' : '跳跃'}</span>
     </button>
   </div>
 </div>
@@ -135,6 +158,20 @@
     align-items: flex-end;
     gap: 12px;
     pointer-events: auto;
+  }
+  .extra {
+    position: absolute;
+    right: 24px;
+    bottom: 118px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    pointer-events: auto;
+  }
+  .btn.small {
+    width: 50px;
+    height: 50px;
+    font-size: 0.5rem;
   }
   .btn {
     width: 58px;

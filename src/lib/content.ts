@@ -1,5 +1,5 @@
-// Placeholder copy for the wonder panels. Each section feeds one wonder in
-// `game/wonders.ts`; the real zone stories replace these once the themes are set.
+// Copy for the beacon panels. Each section feeds one beacon in
+// `game/wonders.ts`.
 
 export type LootLink = { label: string; url: string };
 
@@ -20,19 +20,16 @@ export type Section = {
   items: LootItem[];
 };
 
-export const name = 'Planet Game';
-export const tagline = 'A small metal planet waiting to be explored.';
+export const name = '机械星球';
+export const tagline = '一颗被轨道矿车环绕的机械星球。';
 
-export const resumePath = '#';
-export const resumeDevUrl = '#';
-
-const placeholder = (title: string): LootItem[] => [{ title, body: 'Story coming soon.', links: [] }];
+const placeholder = (title: string): LootItem[] => [{ title, body: '记录待补。', links: [] }];
 
 export const sections: Section[] = [
-  { id: 'work', label: 'ZONE 1', color: 0xff6b35, items: placeholder('Zone 1 record') },
-  { id: 'education', label: 'ZONE 2', color: 0x5fd3ff, items: placeholder('Zone 2 record') },
-  { id: 'projects', label: 'ZONE 3', color: 0xffb703, items: placeholder('Zone 3 record') },
-  { id: 'resume', label: 'ZONE 4', color: 0x9b7bff, items: placeholder('Zone 4 record') },
-  { id: 'blog', label: 'LOG', color: 0x7be4bc, items: placeholder('Field log') },
-  { id: 'contact', label: 'SIGNAL', color: 0xf39868, items: placeholder('Signal') }
+  { id: 'work', label: '区域 1', color: 0xff6b35, items: placeholder('区域记录') },
+  { id: 'education', label: '区域 2', color: 0x5fd3ff, items: placeholder('区域记录') },
+  { id: 'projects', label: '区域 3', color: 0xffb703, items: placeholder('区域记录') },
+  { id: 'resume', label: '区域 4', color: 0x9b7bff, items: placeholder('区域记录') },
+  { id: 'blog', label: '日志', color: 0x7be4bc, items: placeholder('行动记录') },
+  { id: 'contact', label: '信号', color: 0xf39868, items: placeholder('信号') }
 ];

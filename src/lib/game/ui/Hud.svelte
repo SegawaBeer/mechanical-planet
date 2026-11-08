@@ -4,8 +4,8 @@
   import type { BiomeCaption } from '../store';
 
   export let found = 0;
-  export let total = 7;
-  /** Starlight shards collected on this planet. */
+  export let total = 4;
+  /** Energy crystals collected on this planet. */
   export let shards: { found: number; total: number } = { found: 0, total: 0 };
   export let space: SpaceStatus = {
     parts: 0,
@@ -13,8 +13,8 @@
     crafted: false,
     fuel: 0,
     maxFuel: MAX_FUEL,
-    planetName: 'Earth',
-    planetKind: 'Homeworld',
+    planetName: 'Mechanical Planet',
+    planetKind: '机械星球',
     depth: 0,
     isEarth: true
   };
@@ -32,15 +32,7 @@
     journal: void;
     help: void;
     interact: void;
-    refuel: void;
-    launch: void;
-    earth: void;
   }>();
-
-  $: boundedFuel = Math.min(Math.max(space.fuel, 0), Math.max(space.maxFuel, 0));
-  $: needsRefuel = space.crafted && boundedFuel < space.maxFuel;
-  $: lowFuel = space.crafted && boundedFuel <= space.maxFuel * 0.4;
-  $: planetKind = space.planetKind.replace(/[-_]/g, ' ');
 </script>
 
 <div class="hud" aria-live="polite">
@@ -51,24 +43,23 @@
       <circle cx="26.5" cy="9" r="1.4" class="dot" />
     </svg>
     <div>
-      <p class="brand-name">Tiny Planet</p>
-      <p class="brand-sub">A pocket portfolio</p>
+      <p class="brand-name">机械星球</p>
+      <p class="brand-sub">A mechanical planet</p>
     </div>
   </div>
 
   <div class="counter" class:complete={found >= total}>
     <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H11v16H5.5A1.5 1.5 0 0 1 4 18.5z" />
-      <path d="M13 4h5.5A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5H13z" />
+      <path d="M12 3l2.4 5.6L20 11l-5.6 2.4L12 19l-2.4-5.6L4 11l5.6-2.4z" />
     </svg>
     {#key found}
       <strong class="count">{found}</strong>
     {/key}
     <span class="of">/ {total}</span>
-    <span class="label">small wonders</span>
+    <span class="label">信标</span>
     {#if shards.total > 0}
       <span class="divider"></span>
-      <span class="shards" class:complete={shards.found >= shards.total} title="Starlight shards on this planet">
+      <span class="shards" class:complete={shards.found >= shards.total} title="这颗星球上的能量晶块">
         <span class="shard-icon">✦</span>
         {#key shards.found}
           <strong class="count">{shards.found}</strong>
@@ -77,71 +68,15 @@
       </span>
     {/if}
   </div>
-  <section class="mission" class:ship-ready={space.crafted} aria-label="Journey objective">
-    <p class="mission-place">
-      {space.planetName}
-      <span>· {planetKind}{space.depth > 0 ? ` · depth ${space.depth}` : ''}</span>
-    </p>
-    {#if space.crafted}
-      <div class="fuel-heading" class:low={lowFuel}>
-        <strong>
-          {#if needsRefuel && space.isEarth}
-            Landing pad recharge available
-          {:else if lowFuel}
-            Low fuel · collect ✦ shards
-          {:else}
-            Ship ready · direct flight
-          {/if}
-        </strong>
-        <span>{boundedFuel} / {space.maxFuel} fuel</span>
-      </div>
-      <progress class:low={lowFuel} value={boundedFuel} max={Math.max(space.maxFuel, 1)} aria-label={`Ship fuel: ${boundedFuel} of ${space.maxFuel}`}></progress>
-      {#if needsRefuel && space.isEarth}
-        <button class="refuel" on:click={() => dispatch('refuel')}>Refuel to {space.maxFuel}</button>
-      {:else if lowFuel}
-        <p class="fuel-help">Collect starlight, or use home recall for a full recharge.</p>
-      {/if}
-    {:else if !space.isEarth}
-      <div class="mission-line">
-        <strong>{space.parts >= space.totalParts ? 'Craft your spaceship on Earth' : 'Recover ship parts on Earth'}</strong>
-        <span>{space.parts} / {space.totalParts}</span>
-      </div>
-    {:else if space.parts >= space.totalParts}
-      <div class="mission-line complete">
-        <strong>All five parts recovered</strong>
-        <span>Craft at the landing pad</span>
-      </div>
-    {:else}
-      <div class="mission-line">
-        <strong>Recover the five ship parts</strong>
-        <span>{space.parts} / {space.totalParts}</span>
-      </div>
-    {/if}
-  </section>
 
   <div class="actions">
-    {#if space.crafted}
-      <button class="round" on:click={() => dispatch('launch')} aria-label="Board spaceship and launch" title="Board ship and launch">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M14.5 4.5c2.2-1.1 4-1.1 5-1-0.1 1-0.1 2.8-1.2 5L14 12.8l-3-3z" />
-          <path d="M11 9.8 7.5 9 5 11.5l4 1.5 1.5 4 2.5-2.5-.8-3.5M15.5 8.5h.01" />
-        </svg>
-      </button>
-    {/if}
-    {#if !space.isEarth}
-      <button class="round" on:click={() => dispatch('earth')} aria-label="Teleport home to Earth for free" title="Return to Earth · free">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="m4 11 8-7 8 7M6.5 9.5V20h11V9.5M9.5 20v-6h5v6" />
-        </svg>
-      </button>
-    {/if}
-    <button class="round" class:active={globeView} on:click={() => dispatch('globe')} aria-label={globeView ? 'Return to the ground' : 'View the whole planet'} title="Globe view (M)">
+    <button class="round" class:active={globeView} on:click={() => dispatch('globe')} aria-label={globeView ? '回到地面' : '查看整颗星球'} title="星球视角 (M)">
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <circle cx="12" cy="12" r="9" />
         <path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18" />
       </svg>
     </button>
-    <button class="round" on:click={() => dispatch('mute')} aria-label={muted ? 'Unmute' : 'Mute'} title={muted ? 'Unmute' : 'Mute'}>
+    <button class="round" on:click={() => dispatch('mute')} aria-label={muted ? '打开声音' : '静音'} title={muted ? '打开声音' : '静音'}>
       {#if muted}
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M4 9v6h4l5 4V5L8 9z" />
@@ -154,19 +89,19 @@
         </svg>
       {/if}
     </button>
-    <button class="round" on:click={() => dispatch('photo')} aria-label="Photo mode" title="Photo mode (P)">
+    <button class="round" on:click={() => dispatch('photo')} aria-label="拍照模式" title="拍照模式 (P)">
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path d="M4 8.5A1.5 1.5 0 0 1 5.5 7H8l1.5-2h5L16 7h2.5A1.5 1.5 0 0 1 20 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5z" />
         <circle cx="12" cy="13" r="3.2" />
       </svg>
     </button>
-    <button class="round" on:click={() => dispatch('journal')} aria-label="Journal" title="Journal (J)">
+    <button class="round" on:click={() => dispatch('journal')} aria-label="日志" title="日志 (J)">
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path d="M5 4.5A1.5 1.5 0 0 1 6.5 3H18a1 1 0 0 1 1 1v14.5a1.5 1.5 0 0 1-1.5 1.5H6.5A1.5 1.5 0 0 1 5 18.5z" />
         <path d="M5 17.5A1.5 1.5 0 0 1 6.5 16H19M9 7.5h6M9 10.5h4" />
       </svg>
     </button>
-    <button class="round" on:click={() => dispatch('help')} aria-label="Help" title="Help (H)">
+    <button class="round" on:click={() => dispatch('help')} aria-label="帮助" title="帮助 (H)">
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <circle cx="12" cy="12" r="9" />
         <path d="M9.5 9.5a2.5 2.5 0 1 1 3.6 2.2c-.8.5-1.1 1-1.1 1.8M12 17h.01" />
@@ -189,7 +124,7 @@
       <button class="prompt" on:click={() => dispatch('interact')}>
         <span class="key">E</span>
         <span class="prompt-text">
-          <span class="kicker">{prompt.kicker ?? (prompt.found ? 'Found · visit again' : 'A small wonder')}</span>
+          <span class="kicker">{prompt.kicker ?? (prompt.found ? '已点亮 · 可以再来' : '一座信标')}</span>
           <span class="action">{prompt.action}</span>
         </span>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
@@ -198,23 +133,23 @@
 
     {#if intro}
       {#if isTouch}
-        <p class="hint-line"><span class="spark">✦</span> Tap to wander <span class="sep">·</span> drag to orbit <span class="sep">·</span> pinch to zoom</p>
+        <p class="hint-line"><span class="spark">✦</span> 拖动摇杆移动 <span class="sep">·</span> 拖动画面转视角 <span class="sep">·</span> 双指缩放</p>
       {:else}
-        <p class="hint-line"><span class="spark">✦</span> Click anywhere to wander <span class="sep">|</span> Drag to orbit <span class="sep">·</span> Scroll to zoom</p>
+        <p class="hint-line"><span class="spark">✦</span> 方向键移动，左右键转向 <span class="sep">|</span> 拖动转视角 <span class="sep">·</span> 滚轮缩放</p>
       {/if}
     {/if}
 
     {#if !isTouch}
       <div class="hints">
-        <span class="group"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk</span>
-        <span class="group"><kbd>⇧</kbd> run</span>
-        <span class="group"><kbd>space</kbd> hop</span>
-        <span class="group"><kbd>E</kbd> interact</span>
-        <span class="group"><kbd>M</kbd> globe</span>
-        <span class="group"><kbd>J</kbd> journal</span>
+        <span class="group"><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> 移动</span>
+        <span class="group"><kbd>⇧</kbd> 奔跑</span>
+        <span class="group"><kbd>空格</kbd> 跳跃</span>
+        <span class="group"><kbd>F</kbd> 变形</span>
+        <span class="group"><kbd>E</kbd> 互动</span>
+        <span class="group"><kbd>M</kbd> 星球</span>
       </div>
     {:else if !intro}
-      <p class="hint-line small">Tap a spot to wander · drag to look around</p>
+      <p class="hint-line small">拖动摇杆移动 · 拖动画面转视角</p>
     {/if}
   </div>
 </div>

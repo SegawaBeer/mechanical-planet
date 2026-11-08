@@ -82,9 +82,9 @@ export const OCEAN: Biome = {
   index: '00',
   tagline: '流动的星球血脉。',
   center: dir(0, -1, 0),
-  ground: [0x10404c, 0x124855, 0x0e3842],
-  accent: 0x10404c,
-  beach: 0x10404c
+  ground: [0x0d161c, 0x111d24, 0x0a1217],
+  accent: 0x0a1217,
+  beach: 0x0a1217
 };
 
 const LAND_BIOMES = BIOMES;
@@ -148,25 +148,54 @@ export function layoutBiomes(seed: number): void {
       c.addScaledVector(force, 0.02).normalize();
     }
   }
+  arcs = null;
 }
 
 function angleTo(b: Biome, d: THREE.Vector3): number {
   return Math.acos(THREE.MathUtils.clamp(b.center.dot(d), -1, 1));
 }
 
-/** Angular Voronoi over the zones with noise-warped borders. */
-export function landBiomeAt(d: THREE.Vector3): Biome {
-  let best = LAND_BIOMES[0];
-  let bestScore = Infinity;
+const _blend: { primary: Biome; secondary: Biome; mix: number } = {
+  primary: LAND_BIOMES[0],
+  secondary: LAND_BIOMES[1],
+  mix: 0
+};
+
+/**
+ * The two zones nearest `d` and how much the ground should favour the second.
+ *
+ * Zone shaping runs on whichever zone owns a point, so a hard height step would
+ * sit along every border. Handing the caller the runner-up and a weight that
+ * falls off within a few surface units lets the terrain cross-fade its shapes
+ * instead of breaking into a cliff.
+ */
+export function landBiomeBlend(d: THREE.Vector3): { primary: Biome; secondary: Biome; mix: number } {
   const warp = fbm3(d.x * 2.3 + 5, d.y * 2.3, d.z * 2.3 - 3, 3) * 0.22;
+  let primary = LAND_BIOMES[0];
+  let bestScore = Infinity;
+  let secondary = LAND_BIOMES[1];
+  let secondScore = Infinity;
   for (const b of LAND_BIOMES) {
     const score = angleTo(b, d) + warp;
     if (score < bestScore) {
+      secondScore = bestScore;
+      secondary = primary;
       bestScore = score;
-      best = b;
+      primary = b;
+    } else if (score < secondScore) {
+      secondScore = score;
+      secondary = b;
     }
   }
-  return best;
+  _blend.primary = primary;
+  _blend.secondary = secondary;
+  _blend.mix = 0.5 * (1 - THREE.MathUtils.smoothstep(secondScore - bestScore, 0, 0.07));
+  return _blend;
+}
+
+/** Angular Voronoi over the zones with noise-warped borders. */
+export function landBiomeAt(d: THREE.Vector3): Biome {
+  return landBiomeBlend(d).primary;
 }
 
 /** Angle (radians) from `d` to the nearest zone centre. */
@@ -176,15 +205,84 @@ export function nearestCenterAngle(d: THREE.Vector3): number {
   return best;
 }
 
+/** Radius of the planet, mirrored here to keep `biomes.ts` free of cycles. */
+const PLANET_RADIUS_LOCAL = 42;
+/** Angular half-width of the dry core of a crossing, in radians. */
+const CROSS_CORE = 1.5 / PLANET_RADIUS_LOCAL;
+/** Angular half-width at which a crossing has faded back into the channel. */
+const CROSS_FADE = 2.7 / PLANET_RADIUS_LOCAL;
+/** Field value a crossing settles at: above zero so it is land, below the 0.06
+ * that prop scattering needs, so nothing solid is strewn across the causeway. */
+const CROSS_DRY = 0.05;
+
+type Arc = { a: THREE.Vector3; b: THREE.Vector3; n: THREE.Vector3; cos: number; len: number };
+
+let arcs: Arc[] | null = null;
+
 /**
- * Signed channel field: negative inside an energy channel, positive on metal.
+ * Great-circle arcs joining every pair of zone centres. These are the causeways
+ * the player can drive: the channel field is forced dry across them so no zone
+ * is walled off by the energy rivers. Rebuilt whenever the centres move.
+ */
+function crossingArcs(): Arc[] {
+  if (arcs) return arcs;
+  const list: Arc[] = [];
+  for (let i = 0; i < LAND_BIOMES.length; i++) {
+    for (let j = i + 1; j < LAND_BIOMES.length; j++) {
+      const a = LAND_BIOMES[i].center;
+      const b = LAND_BIOMES[j].center;
+      const n = new THREE.Vector3().crossVectors(a, b);
+      if (n.lengthSq() < 1e-8) continue;
+      list.push({ a, b, n: n.normalize(), cos: a.dot(b), len: a.angleTo(b) });
+    }
+  }
+  arcs = list;
+  return arcs;
+}
+
+const _proj = new THREE.Vector3();
+
+/** Angular distance from `d` to the closest point of `arc`, given `side`. */
+function arcDistance(arc: Arc, d: THREE.Vector3, side: number): number {
+  _proj.copy(d).addScaledVector(arc.n, -d.dot(arc.n));
+  if (_proj.lengthSq() < 1e-10) return arc.len;
+  _proj.normalize();
+  // Within the arc's own span both endpoints are inside one arc length of it.
+  if (arc.a.dot(_proj) >= arc.cos && arc.b.dot(_proj) >= arc.cos) {
+    return Math.asin(Math.min(1, side));
+  }
+  return Math.min(arc.a.angleTo(d), arc.b.angleTo(d));
+}
+
+/**
+ * How much `d` belongs to a crossing, 0 on open channel and 1 on the causeway
+ * core. The dot with the arc's plane normal prunes almost every point with one
+ * multiply, which matters because the ground mesh samples this a lot at load.
+ */
+function crossingAt(d: THREE.Vector3): number {
+  let best = 0;
+  for (const arc of crossingArcs()) {
+    const side = Math.abs(d.dot(arc.n));
+    if (side > Math.sin(CROSS_FADE)) continue;
+    const dist = arcDistance(arc, d, side);
+    if (dist >= CROSS_FADE) continue;
+    const t = 1 - THREE.MathUtils.smoothstep(dist, CROSS_CORE, CROSS_FADE);
+    if (t > best) best = t;
+  }
+  return best;
+}
+
+/**
+ * Signed channel field before the crossings are cut: negative inside an energy
+ * channel, positive on metal. Exported so zone scenery can find the channels it
+ * bridges.
  *
  * Channels follow the zero set of a smooth noise, which draws long winding
  * lines instead of blobs. The river zone carries wider channels and a second,
  * finer network of veins; the fortress keeps its channels thin. Each zone core
  * is held dry so its landmarks and wonders always stand on solid ground.
  */
-export function oceanField(d: THREE.Vector3): number {
+export function channelField(d: THREE.Vector3): number {
   const river = LAND_BIOMES[0];
   const near = THREE.MathUtils.smoothstep(-angleTo(river, d), -1.0, -0.25);
   const fortress = THREE.MathUtils.smoothstep(-angleTo(LAND_BIOMES[3], d), -0.9, -0.3);
@@ -205,6 +303,19 @@ export function oceanField(d: THREE.Vector3): number {
   }
   return keep * channel + (1 - keep) * Math.max(channel, 0.3);
 }
+
+/**
+ * Channel field with the crossings cut through it. Where a great-circle arc
+ * between two zone centres passes over a channel, the field is lifted to dry
+ * land, so every zone can be driven to from every other.
+ */
+export function oceanField(d: THREE.Vector3): number {
+  const field = channelField(d);
+  const dry = crossingAt(d);
+  if (dry <= 0) return field;
+  return THREE.MathUtils.lerp(field, Math.max(field, CROSS_DRY), dry);
+}
+
 
 export function isOcean(d: THREE.Vector3): boolean {
   return oceanField(d) < 0;

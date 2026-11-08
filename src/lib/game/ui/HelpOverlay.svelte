@@ -5,7 +5,7 @@
 
   export let isTouch = false;
   export let found = 0;
-  export let total = 7;
+  export let total = 4;
   export let seed = '';
   export let depth = 0;
 
@@ -32,80 +32,70 @@
 <div class="overlay" role="dialog" aria-modal="true" aria-label="How to play">
   <button class="backdrop" on:click={() => dispatch('close')} aria-label="Close"></button>
   <div class="panel">
-    <p class="kicker">How to wander</p>
-    <h2>Seven wonders, one way into deep space</h2>
+    <p class="kicker">玩法</p>
+    <h2>机械星球 · 操作指南</h2>
     <p class="lead">
-      Explore the planet and open its glowing wonders. Found so far:
-      <strong>{found} of {total}</strong>.
+      在四个区域里点亮信标，爬上高塔看天上的矿石列车。已点亮：
+      <strong>{found} / {total}</strong>。
     </p>
 
     <section class="journey" aria-labelledby="journey-title">
-      <p class="kicker" id="journey-title">Your journey</p>
+      <p class="kicker" id="journey-title">目标</p>
       <ol>
-        <li><strong>Recover five ship parts on Earth</strong><span>Search the homeworld for the missing components.</span></li>
-        <li><strong>Craft at Earth's landing pad</strong><span>Bring all five parts back and assemble your ship.</span></li>
-        <li><strong>Land on another world</strong><span>Board the ship, steer toward one of the three labelled terrain planets, and let the landing computer set you down.</span></li>
+        <li><strong>点亮四处信标</strong><span>能量河流、铁堡、方舟号、暗影要塞，每个区域中心各有一座。</span></li>
+        <li><strong>接管另外三个机器人</strong><span>点击另一个机器人就能接管它，按 Tab 回到主角。</span></li>
+        <li><strong>收集能量晶块</strong><span>星球表面散布着发光的晶块，走过去就能拾取。</span></li>
       </ol>
-      <p class="fuel-note"><strong>Fuel:</strong> starlight shards add fuel anywhere. Earth's landing pad can fully recharge the ship; use the free home recall if you run low away from Earth. Each sky label shows its route cost.</p>
-      <p class="earth-note"><strong>Earth recall:</strong> while away, the home control teleports you to Earth for free.</p>
     </section>
 
     <dl>
       {#if isTouch}
-        <div><dt>Walk</dt><dd>Drag the stick in the bottom-left corner, or tap a spot to walk there.</dd></div>
-        <div><dt>Look</dt><dd>Drag anywhere else to orbit the camera. Pinch to zoom.</dd></div>
-        <div><dt>Hop</dt><dd>Tap the hop button.</dd></div>
-        <div><dt>Open a wonder</dt><dd>Walk up to a marker and tap the card that appears.</dd></div>
-        <div>
-          <dt>Animals</dt>
-          <dd>{isEarth ? 'Walk up to a sheep, fox, or polar bear and tap the card to pet it.' : 'Walk up to a local lifeform and tap the card to pet it.'} Pet it twice and it follows you for a while.</dd>
-        </div>
-        <div><dt>Shards</dt><dd>A dozen starlight shards glow purple across each planet. Walk over one to collect it.</dd></div>
-        <div><dt>Ship parts</dt><dd>On Earth, walk into each missing part to recover it. Once all five are found, return to the landing pad and tap the card to craft. Return later to refuel there.</dd></div>
-        <div><dt>Deep space</dt><dd>Board the ship, steer with the stick, and approach a labelled terrain planet to land. Toggle boost for more speed; tap return to abort to the current world.</dd></div>
-        <div><dt>Earth</dt><dd>When away from home, tap the home control for a free recall.</dd></div>
-        <div><dt>Journal</dt><dd>Tap the book button to see the biomes, animals, and milestones you have collected across every planet.</dd></div>
-        <div><dt>Boats</dt><dd>Stand at the shore and tap the card to launch a boat. Steer with the stick. Reach land to dock.</dd></div>
-        <div><dt>The sky</dt><dd>The three large labelled planets have visible land, water, and a surface your spacecraft can land on. The moon, constellations, and odd shooting star share the night with them.</dd></div>
-        <div><dt>Photo mode</dt><dd>Tap the camera button to hide the interface. Save a picture or leave from the corner buttons.</dd></div>
+        <div><dt>移动</dt><dd>用左下角的摇杆前后移动、左右转向。</dd></div>
+        <div><dt>奔跑与加速</dt><dd>按住奔跑键；载具形态下是加速。</dd></div>
+        <div><dt>跳跃</dt><dd>只有机器人形态能跳。</dd></div>
+        <div><dt>变形</dt><dd>点变形按钮，在机器人形态和载具形态之间切换。</dd></div>
+        <div><dt>信标</dt><dd>走到信标旁边，点出现的卡片点亮它。</dd></div>
+        <div><dt>换人</dt><dd>点击另一个机器人就接管它；点回到主角按钮，或用 Tab，回主角。</dd></div>
+        <div><dt>晶块</dt><dd>发光的能量晶块走过去就捡起来。</dd></div>
+        <div><dt>视角</dt><dd>拖动屏幕旋转视角，双指缩放。</dd></div>
+        <div><dt>日志</dt><dd>点书页按钮查看区域、信标、机器动物和晶块的进度。</dd></div>
+        <div><dt>拍照</dt><dd>点相机按钮隐藏界面，再从角落保存或退出。</dd></div>
       {:else}
-        <div><dt><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></dt><dd>Walk. Arrow keys work too.</dd></div>
-        <div><dt><kbd>Shift</kbd></dt><dd>Run.</dd></div>
-        <div><dt><kbd>Space</kbd></dt><dd>Hop.</dd></div>
-        <div><dt><kbd>E</kbd></dt><dd>Interact with wonders and animals. At Earth's landing pad, craft after recovering all five ship parts, launch, or fully refuel the ship.</dd></div>
-        <div><dt><kbd>M</kbd></dt><dd>Pull back to see the whole planet. Click a spot to walk there.</dd></div>
-        <div><dt><kbd>J</kbd></dt><dd>Open the journal: biomes visited, animals befriended, milestones, and a dozen starlight shards to find on each planet.</dd></div>
-        <div><dt>Deep space</dt><dd>Board the ship, steer with <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>, hold <kbd>Shift</kbd> to boost, and approach a labelled terrain planet to land. <kbd>Space</kbd> returns to the current world.</dd></div>
-        <div><dt>Earth recall</dt><dd>When away from home, use the home control for a free recall.</dd></div>
-        <div><dt>The sky</dt><dd>The three large labelled planets have visible land, water, and a surface your spacecraft can land on. The moon, constellations, auroras, and odd shooting star share the night with them.</dd></div>
-        <div><dt><kbd>P</kbd></dt><dd>Photo mode: hides the interface. Press again or <kbd>Esc</kbd> to leave, or save a picture from the corner.</dd></div>
-        <div><dt>Mouse</dt><dd>Drag to orbit the camera, scroll to zoom, click the ground to walk.</dd></div>
-        <div><dt>Boats</dt><dd>Stand at the shore and press <kbd>E</kbd> to launch a boat. Steer with the walk keys. Reach land to dock.</dd></div>
+        <div><dt><kbd>方向键</kbd><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></dt><dd>上下前后移动，左右转向。</dd></div>
+        <div><dt><kbd>Shift</kbd></dt><dd>奔跑；载具形态下是加速。</dd></div>
+        <div><dt><kbd>空格</kbd></dt><dd>跳跃，只有机器人形态可以。</dd></div>
+        <div><dt><kbd>F</kbd></dt><dd>在机器人形态和载具形态之间变形。</dd></div>
+        <div><dt><kbd>E</kbd></dt><dd>和信标互动。点击另一个机器人可以接管它，<kbd>Tab</kbd> 回到主角。</dd></div>
+        <div><dt><kbd>M</kbd></dt><dd>拉开到星球视角，看整颗星球和天上的环轨。</dd></div>
+        <div><dt><kbd>J</kbd></dt><dd>打开日志：走过的区域、点亮的信标、见过的机器动物、捡到的能量晶块。</dd></div>
+        <div><dt><kbd>H</kbd></dt><dd>打开这份帮助。</dd></div>
+        <div><dt><kbd>P</kbd></dt><dd>拍照模式：隐藏界面。再按一次或 <kbd>Esc</kbd> 退出，也可以从角落保存图片。</dd></div>
+        <div><dt>鼠标</dt><dd>拖动旋转视角，滚轮缩放。</dd></div>
+        <div><dt>抬头看</dt><dd>天上跑着三圈矿石列车，远处挂着一颗带光环的行星。</dd></div>
       {/if}
     </dl>
 
     {#if seed}
       <div class="seed">
         <div class="seed-text">
-          <p class="kicker">{isEarth ? 'Homeworld' : `Planet seed · depth ${depth}`}</p>
+          <p class="kicker">{isEarth ? '起始星球' : `星球种子 · 深度 ${depth}`}</p>
           <p class="seed-label"><code>{seed}</code></p>
           <p class="seed-help">
             {#if copyState === 'failed'}
-              Copy this link by hand: <span class="seed-url">{link}</span>
+              手动复制这个链接：<span class="seed-url">{link}</span>
             {:else}
-              Share this link to show someone this exact world.
+              把这个链接发给别人，就能进入同一颗星球。
             {/if}
           </p>
         </div>
         <div class="seed-actions">
-          <button class="chip" on:click={copyLink}>{copyState === 'copied' ? 'Copied' : 'Copy link'}</button>
+          <button class="chip" on:click={copyLink}>{copyState === 'copied' ? '已复制' : '复制链接'}</button>
         </div>
       </div>
     {/if}
 
     <div class="actions">
-      <button class="continue" on:click={() => dispatch('close')}>Back to the planet</button>
-      <a class="text-link" href="/">Prefer plain text? Open the site</a>
+      <button class="continue" on:click={() => dispatch('close')}>回到星球</button>
     </div>
   </div>
 </div>

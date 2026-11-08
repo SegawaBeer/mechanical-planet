@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { biomeAt, configureBiomeOcean, isOcean, landBiomeAt, oceanField, OCEAN, type Biome } from './biomes';
+import { biomeAt, configureBiomeOcean, isOcean, landBiomeBlend, oceanField, OCEAN, type Biome } from './biomes';
 import { deriveSeed, fbm3, hash3, seededRng } from './noise';
 import type { PlanetProfile } from './space';
 
@@ -11,7 +11,6 @@ let terrainReliefScale = 1;
 let terrainRuggedScale = 1;
 let terrainDetailScale = 1;
 let terrainCreaseFrequency = 3.2;
-let planetWater = 0x256a8c;
 
 /** Apply a profile to all subsequently generated terrain and water. */
 export function configurePlanet(profile: PlanetProfile): void {
@@ -21,7 +20,6 @@ export function configurePlanet(profile: PlanetProfile): void {
   terrainRuggedScale = ruggedness;
   terrainDetailScale = THREE.MathUtils.lerp(1, ruggedness, 0.65);
   terrainCreaseFrequency = 3.2 * (1 + (ruggedness - 1) * 0.25);
-  planetWater = profile.water;
   configureBiomeOcean(profile);
 }
 
@@ -43,26 +41,30 @@ export function surfaceRadius(d: THREE.Vector3): number {
     const depth = Math.min(1, -f * 14);
     return PLANET_RADIUS - 0.35 - depth * 1.3;
   }
-  const zone = landBiomeAt(d);
   // Canyon walls: a short steep rise out of the channel, then the plates.
   const rise = Math.min(1, f * 9);
   const swell = fbm3(d.x * 1.9 - 7, d.y * 1.9 + 4, d.z * 1.9 + 9, 3) * 1.4 * reliefScale;
   const roll = fbm3(d.x * 6 + 3, d.y * 6, d.z * 6 - 1, 3) * 0.35 * detailScale;
+  const base = 0.6 + swell + roll;
+  // Zone shapes cross-fade near a border so no cliff runs along it.
+  const blend = landBiomeBlend(d);
+  let h = zoneHeight(blend.primary, base, d);
+  if (blend.mix > 0) h = THREE.MathUtils.lerp(h, zoneHeight(blend.secondary, base, d), blend.mix);
+  const shaped = h >= 0 ? h : Math.max(-0.2, h * 0.15);
+  return PLANET_RADIUS + 0.7 + rise * shaped;
+}
+
+/** How one zone shapes the basic swell-and-roll ground. */
+function zoneHeight(zone: Biome, h: number, d: THREE.Vector3): number {
   const near = THREE.MathUtils.smoothstep(Math.acos(THREE.MathUtils.clamp(zone.center.dot(d), -1, 1)), 0.55, 0.2);
-  let h = 0.6 + swell + roll;
   if (zone.id === 'river') {
     // Ridged mesas between the channels: the canyon country.
     const crease = 1 - Math.abs(fbm3(d.x * terrainCreaseFrequency - 12, d.y * terrainCreaseFrequency + 6, d.z * terrainCreaseFrequency - 2, 3));
-    h += crease * crease * 1.6 * terrainRuggedScale;
-  } else if (zone.id === 'citadel') {
-    h = Math.round((h + 0.4 * near) / 0.45) * 0.45;
-  } else if (zone.id === 'ark') {
-    h = THREE.MathUtils.lerp(h, 0.55, near * 0.85);
-  } else if (zone.id === 'fortress') {
-    h = Math.round((h + 1.1 * near) / 0.7) * 0.7;
+    return h + crease * crease * 1.6 * terrainRuggedScale;
   }
-  const shaped = h >= 0 ? h : Math.max(-0.2, h * 0.15);
-  return PLANET_RADIUS + 0.7 + rise * shaped;
+  if (zone.id === 'citadel') return Math.round((h + 0.4 * near) / 0.45) * 0.45;
+  if (zone.id === 'ark') return THREE.MathUtils.lerp(h, 0.55, near * 0.85);
+  return Math.round((h + 1.1 * near) / 0.7) * 0.7;
 }
 
 const _na = new THREE.Vector3();
@@ -150,23 +152,28 @@ function plateHash(d: THREE.Vector3, size: number): number {
   return hash3(Math.floor(d.x * size), Math.floor(d.y * size), Math.floor(d.z * size));
 }
 
-/**
- * Colour for one ground face. Faces are grouped into plates on a coarse grid,
- * each plate picking one of its zone's three metals, with a rare plate in the
- * zone's accent. A finer grid lays darker seams between the plates.
- */
-function plateColor(b: Biome, d: THREE.Vector3): number {
-  const size = b.id === 'citadel' ? 11 : b.id === 'fortress' ? 8 : 9;
-  const h = plateHash(d, size);
-  if (h > 0.93) return b.accent;
-  const seam = plateHash(d, size * 3) < 0.12;
-  const palette = b.ground;
-  const hex = h < 0.55 ? palette[0] : h < 0.82 ? palette[1] : palette[2];
-  return seam ? palette[2] : hex;
+/** Cell coordinates of a direction on the plate grid. */
+function plateCell(d: THREE.Vector3, size: number, out: [number, number, number]): void {
+  out[0] = Math.floor(d.x * size);
+  out[1] = Math.floor(d.y * size);
+  out[2] = Math.floor(d.z * size);
 }
 
+/**
+ * Colour for one ground face. Each plate picks one of its zone's three metals,
+ * with a rare plate in the zone's accent.
+ */
+function plateColor(b: Biome, h: number): number {
+  if (h > 0.93) return b.accent;
+  const palette = b.ground;
+  return h < 0.55 ? palette[0] : h < 0.82 ? palette[1] : palette[2];
+}
+
+const WALL_DARK = new THREE.Color(0x161d24);
+const WALL_LIGHT = new THREE.Color(0x51606c);
+
 export function buildGround(): THREE.Mesh {
-  const geo = new THREE.IcosahedronGeometry(1, 44);
+  const geo = new THREE.IcosahedronGeometry(1, 46);
   const pos = geo.attributes.position as THREE.BufferAttribute;
   const colors = new Float32Array(pos.count * 3);
   const a = new THREE.Vector3();
@@ -174,6 +181,10 @@ export function buildGround(): THREE.Mesh {
   const c = new THREE.Vector3();
   const mid = new THREE.Vector3();
   const col = new THREE.Color();
+  const ca: [number, number, number] = [0, 0, 0];
+  const cb: [number, number, number] = [0, 0, 0];
+  const cc: [number, number, number] = [0, 0, 0];
+  const cm: [number, number, number] = [0, 0, 0];
 
   for (let i = 0; i < pos.count; i += 3) {
     a.fromBufferAttribute(pos, i).normalize();
@@ -184,10 +195,33 @@ export function buildGround(): THREE.Mesh {
     const biome = biomeAt(mid);
     const f = oceanField(mid);
     let hex: number;
+    let seam = false;
     if (biome === OCEAN) hex = OCEAN.ground[hash3(i, 3, 5) < 0.5 ? 0 : 1];
     else if (f < 0.035) hex = biome.beach;
-    else hex = plateColor(biome, mid);
+    else {
+      const size = biome.id === 'citadel' ? 11 : biome.id === 'fortress' ? 8 : 9;
+      // A face that straddles a plate boundary is a seam: every face around it
+      // sits inside one cell. That gives seams exactly one face wide, so they
+      // read as cut lines rather than as a mottled grid.
+      plateCell(mid, size, cm);
+      plateCell(a, size, ca);
+      plateCell(b, size, cb);
+      plateCell(c, size, cc);
+      seam = cellDiffers(ca, cm) || cellDiffers(cb, cm) || cellDiffers(cc, cm);
+      hex = seam ? biome.ground[2] : plateColor(biome, hash3(cm[0], cm[1], cm[2]));
+    }
     col.setHex(hex);
+
+    // Canyon walls: the ground climbing out of a channel is rougher and banded
+    // in strata, so the bank reads as cut rock rather than as a plate edge.
+    if (f >= 0 && f < 0.26 && biome !== OCEAN) {
+      const wall = 1 - Math.min(1, f / 0.26);
+      const strata = Math.sin(mid.y * 78 + mid.x * 11) * 0.5 + 0.5;
+      col.lerp(WALL_DARK, wall * 0.7);
+      col.lerp(WALL_LIGHT, wall * strata * 0.22);
+    }
+    // Seams sit darker than the plate they divide.
+    if (seam) col.multiplyScalar(0.72);
     // Faint per-face variation keeps the flat shading from looking like a texture.
     col.multiplyScalar(0.95 + hash3(i, 7, 13) * 0.1);
 
@@ -216,20 +250,31 @@ export function buildGround(): THREE.Mesh {
   return mesh;
 }
 
-/** Water depth, in world units, at which the sea reads as fully deep. */
+/** True when two plate cells differ, the test that marks a seam face. */
+function cellDiffers(x: [number, number, number], y: [number, number, number]): boolean {
+  return x[0] !== y[0] || x[1] !== y[1] || x[2] !== y[2];
+}
+
+/** Energy depth, in world units, at which the channel reads as fully open. */
 const SHALLOW = 2.6;
 
+/** Palette of the energy channels. Liquid light, not water. */
+const ENERGY = {
+  deep: 0x0a52c8,
+  base: 0x2fe6ff,
+  hot: 0xd6fdff
+};
+
 /**
- * The sea. A plain sphere, but the shader on it does three things a flat
- * translucent ball cannot: it rolls a low swell through the surface, it darkens
- * with depth, and it breaks into foam where the seabed comes up to meet it.
+ * The energy channels. A sphere at sea level, but shaded as flowing light: two
+ * crossed band fields sweep the surface, banks pull the colour toward white
+ * hot, and grazing angles glow. Depth comes from `aShore`, baked at build time
+ * because the channel bed lives in noise the GPU cannot sample.
  *
- * Depth is baked into a `aShore` attribute at build time rather than sampled in
- * the shader, because the seabed lives in noise the GPU has no access to. The
- * Game drives `uTime` through `mesh.userData.uniforms`.
+ * `uTime` is driven every frame by the Game through `mesh.userData.uniforms`.
  */
 export function buildWater(): THREE.Mesh {
-  const geo = new THREE.SphereGeometry(SEA_LEVEL, 96, 64);
+  const geo = new THREE.SphereGeometry(SEA_LEVEL, 128, 80);
   const pos = geo.attributes.position as THREE.BufferAttribute;
   const shore = new Float32Array(pos.count);
   const d = new THREE.Vector3();
@@ -240,76 +285,94 @@ export function buildWater(): THREE.Mesh {
   }
   geo.setAttribute('aShore', new THREE.BufferAttribute(shore, 1));
 
-  const surface = new THREE.Color(planetWater);
-  const deep = surface.clone().offsetHSL(-0.02, -0.05, -0.04);
-  const foam = surface.clone().offsetHSL(-0.01, -0.25, 0.58);
   const uniforms = {
     uTime: { value: 0 },
-    uDeep: { value: deep },
-    uFoam: { value: foam }
+    uDeep: { value: new THREE.Color(ENERGY.deep) },
+    uBase: { value: new THREE.Color(ENERGY.base) },
+    uHot: { value: new THREE.Color(ENERGY.hot) }
   };
-  const mat = new THREE.MeshStandardMaterial({
-    color: surface,
+
+  const mat = new THREE.ShaderMaterial({
+    uniforms,
     transparent: true,
-    opacity: 0.86,
-    roughness: 0.22,
-    metalness: 0.05
+    depthWrite: true,
+    side: THREE.FrontSide,
+    vertexShader: /* glsl */ `
+      uniform float uTime;
+      attribute float aShore;
+      varying float vShore;
+      varying vec3 vDir;
+      varying vec3 vNormalW;
+      varying vec3 vViewW;
+
+      void main() {
+        vShore = aShore;
+        vec3 dir = normalize(position);
+        // The sheet is never dead still: a slow rise and fall rolls through it.
+        float open = 1.0 - vShore;
+        float swell = sin(dir.x * 3.1 + dir.z * 2.4 + uTime * 1.2) * 0.5
+                   + sin(dir.y * 2.7 - dir.x * 1.9 - uTime * 0.9) * 0.5;
+        vec3 p = position + dir * swell * 0.12 * open;
+        vec4 wp = modelMatrix * vec4(p, 1.0);
+        vDir = dir;
+        vNormalW = normalize(mat3(modelMatrix) * dir);
+        vViewW = cameraPosition - wp.xyz;
+        gl_Position = projectionMatrix * viewMatrix * wp;
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      uniform float uTime;
+      uniform vec3 uDeep;
+      uniform vec3 uBase;
+      uniform vec3 uHot;
+      varying float vShore;
+      varying vec3 vDir;
+      varying vec3 vNormalW;
+      varying vec3 vViewW;
+
+      void main() {
+        // Trim the sheet where the bed rises out of it, so banks are cut clean.
+        if (vShore > 0.997) discard;
+
+        vec3 p = normalize(vDir);
+        float t = uTime;
+
+        // Two crossed band fields, warped by a slow swell so the lines wander
+        // instead of ringing the planet like latitude lines.
+        float warp = sin(p.x * 3.7 + t * 0.5) + sin(p.z * 4.3 - t * 0.4) + sin(p.y * 5.1 + t * 0.31);
+        float a = sin(dot(p, vec3(11.0, 7.0, -9.0)) + warp * 0.9 - t * 2.3);
+        float b = sin(dot(p, vec3(-8.0, 13.0, 8.0)) + warp * 0.5 + t * 1.4);
+        float flow = a * 0.62 + b * 0.38;
+
+        // Narrow crests ride the flow; the troughs fall back to electric blue.
+        float crest = smoothstep(0.45, 0.97, flow);
+        float trough = smoothstep(0.05, -0.85, flow);
+        vec3 col = mix(uBase, uDeep, trough * 0.75);
+        col = mix(col, uHot, crest * 0.7);
+
+        // Banks run hot: the light piles up against the metal it cuts through.
+        float shore = smoothstep(0.7, 0.99, vShore);
+        float pulse = 0.55 + 0.45 * sin(vShore * 24.0 - t * 2.8);
+        col = mix(col, uHot, shore * pulse * 0.85);
+
+        // Fine glitter travelling with the flow, so it reads as moving liquid.
+        float spark = sin(p.x * 61.0 + t * 3.4) * sin(p.y * 53.0 - t * 2.7) * sin(p.z * 47.0 + t * 3.1);
+        col += uHot * pow(max(spark, 0.0), 6.0) * 0.9;
+
+        // Grazing angles glow brighter: the channel is a sheet of light, not paint.
+        float fres = pow(1.0 - abs(dot(normalize(vViewW), normalize(vNormalW))), 2.0);
+        col += uBase * fres * 0.55;
+
+        gl_FragColor = vec4(col, 1.0);
+      }
+    `
   });
-  mat.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, uniforms);
-    shader.vertexShader =
-      `uniform float uTime;
-attribute float aShore;
-varying float vShore;
-varying vec3 vWave;
-` +
-      shader.vertexShader.replace(
-        '#include <begin_vertex>',
-        `#include <begin_vertex>
-  vShore = aShore;
-  vec3 sphereN = normalize(transformed);
-  // Two crossed swells, damped to nothing in the shallows so the surface does
-  // not saw through the beaches.
-  float open = 1.0 - vShore;
-  float w1 = sin(transformed.x * 0.7 + transformed.z * 0.4 + uTime * 1.1);
-  float w2 = sin(transformed.z * 0.9 - transformed.y * 0.5 + uTime * 1.7);
-  transformed += sphereN * (w1 * 0.06 + w2 * 0.04) * open;
-  // The slope of those swells, handed to the fragment stage as a fake normal.
-  vWave = vec3(cos(transformed.x * 0.7 + uTime * 1.1), 0.0, cos(transformed.z * 0.9 + uTime * 1.7)) * 0.12 * open;`
-      );
-    shader.fragmentShader =
-      `uniform float uTime;
-uniform vec3 uDeep;
-uniform vec3 uFoam;
-varying float vShore;
-varying vec3 vWave;
-` +
-      shader.fragmentShader
-        .replace(
-          '#include <color_fragment>',
-          `#include <color_fragment>
-  // Open water is darker and colder than the shallows.
-  diffuseColor.rgb = mix(uDeep, diffuseColor.rgb, 0.45 + 0.55 * vShore);
-  // Foam: a band that follows the waterline, banded so it reads as surf rather
-  // than a flat rim, and pulsed so it breathes with the swell.
-  float band = sin(vShore * 34.0 - uTime * 2.2) * 0.5 + 0.5;
-  float surf = smoothstep(0.62, 0.99, vShore) * (0.35 + 0.65 * band);
-  diffuseColor.rgb = mix(diffuseColor.rgb, uFoam, surf * 0.85);
-  diffuseColor.a = mix(diffuseColor.a, 1.0, surf);`
-        )
-        .replace(
-          '#include <normal_fragment_maps>',
-          `#include <normal_fragment_maps>
-  normal = normalize(normal + vWave);`
-        );
-  };
-  mat.customProgramCacheKey = () => 'water-fx';
   const mesh = new THREE.Mesh(geo, mat);
-  mesh.receiveShadow = true;
   mesh.name = 'water';
   mesh.userData.uniforms = uniforms;
   return mesh;
 }
+
 
 
 export function buildStars(seed: number): THREE.Points {

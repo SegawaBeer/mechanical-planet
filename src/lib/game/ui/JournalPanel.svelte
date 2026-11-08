@@ -22,18 +22,19 @@
   $: earned = MILESTONES.filter((m) => journal.milestones.includes(m.id)).length;
   $: paces = Math.floor(journal.paces);
 
-  /** "polar bear" reads better as "Polar bear" on a stamp. */
-  const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+  /** Display names for the mechanical wildlife recorded by `Critter`. */
+  const NAMES: Record<string, string> = { 'robot deer': '机械鹿' };
+  const label = (s: string) => NAMES[s] ?? s;
 </script>
 
 <div class="overlay" role="dialog" aria-modal="true" aria-label="Traveller's journal">
   <button class="backdrop" on:click={() => dispatch('close')} aria-label="Close"></button>
   <div class="panel">
     <header>
-      <p class="kicker">Traveller's journal</p>
-      <h2>Everything you have gathered</h2>
+      <p class="kicker">行动日志</p>
+      <h2>这颗星球上的记录</h2>
       <p class="lead">
-        Kept across every planet you visit. This one is <code>{seed}</code>.
+        当前星球：<code>{seed}</code>。
       </p>
       <button class="close" on:click={() => dispatch('close')} aria-label="Close">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
@@ -43,28 +44,28 @@
     <div class="stats">
       <div class="stat">
         <strong>{found.length}<span>/{WONDERS.length}</span></strong>
-        <p>wonders here</p>
+        <p>信标</p>
       </div>
       <div class="stat">
         <strong class="lilac">{shards.found}<span>/{shards.total}</span></strong>
-        <p>shards here</p>
+        <p>能量晶块</p>
       </div>
       <div class="stat">
         <strong>{paces.toLocaleString()}</strong>
-        <p>paces walked</p>
+        <p>步数</p>
       </div>
       <div class="stat">
         <strong>{journal.hops.toLocaleString()}</strong>
-        <p>hops</p>
+        <p>跳跃</p>
       </div>
       <div class="stat">
-        <strong>{journal.planets.length}</strong>
-        <p>{journal.planets.length === 1 ? 'planet' : 'planets'}</p>
+        <strong>{biomesSeen}<span>/{biomes.length}</span></strong>
+        <p>区域</p>
       </div>
     </div>
 
     <section>
-      <h3>Wonders <span class="tally">{found.length} / {WONDERS.length}</span></h3>
+      <h3>信标 <span class="tally">{found.length} / {WONDERS.length}</span></h3>
       <ul class="stamps">
         {#each WONDERS as w}
           <li class:known={found.includes(w.id)}>
@@ -76,7 +77,7 @@
     </section>
 
     <section>
-      <h3>Biomes <span class="tally">{biomesSeen} / {biomes.length}</span></h3>
+      <h3>区域 <span class="tally">{biomesSeen} / {biomes.length}</span></h3>
       <ul class="stamps">
         {#each biomes as b}
           {@const known = journal.biomes.includes(biomeJournalKey(seed || EARTH_SEED, b.id))}
@@ -85,27 +86,27 @@
               class="swatch"
               style={`--c:#${(profile.archetype === 'earth' ? b.ground[1] : profile.terrain[1]).toString(16).padStart(6, '0')}`}
             ></span>
-            <span class="name">{known ? b.name : b.kind.charAt(0) + b.kind.slice(1).toLowerCase()}</span>
+            <span class="name">{known ? b.name : '未到访'}</span>
           </li>
         {/each}
       </ul>
     </section>
 
     <section>
-      <h3>Lifeforms befriended <span class="tally">{speciesSeen} / {species.length}</span></h3>
+      <h3>机器动物 <span class="tally">{speciesSeen} / {species.length}</span></h3>
       <ul class="stamps">
         {#each species as sp}
           {@const known = journal.species.includes(sp)}
           <li class:known>
             <span class="mark">{known ? '♥' : '·'}</span>
-            <span class="name">{known ? cap(sp) : '? ? ?'}</span>
+            <span class="name">{known ? label(sp) : '? ? ?'}</span>
           </li>
         {/each}
       </ul>
     </section>
 
     <section>
-      <h3>Milestones <span class="tally">{earned} / {MILESTONES.length}</span></h3>
+      <h3>里程碑 <span class="tally">{earned} / {MILESTONES.length}</span></h3>
       <ul class="milestones">
         {#each MILESTONES as m}
           {@const known = journal.milestones.includes(m.id)}
@@ -121,8 +122,8 @@
     </section>
 
     <footer>
-      <button class="continue" on:click={() => dispatch('close')}>Back to the planet</button>
-      <span class="esc">J, Esc, or tap outside to close</span>
+      <button class="continue" on:click={() => dispatch('close')}>回到星球</button>
+      <span class="esc">J、Esc 或点击空白处关闭</span>
     </footer>
   </div>
 </div>

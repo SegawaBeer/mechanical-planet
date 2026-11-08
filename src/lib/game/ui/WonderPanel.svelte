@@ -1,7 +1,5 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import { dev } from '$app/environment';
-  import { resumePath, resumeDevUrl } from '$lib/content';
   import type { Wonder } from '../wonders';
   import { biomeById } from '../biomes';
 
@@ -12,26 +10,21 @@
 
   $: biome = biomeById(wonder.biome);
 
-  function linkUrl(url: string): string {
-    if (url === resumePath && dev) return resumeDevUrl;
-    return url;
-  }
-
   function isExternal(url: string): boolean {
     return /^https?:/.test(url);
   }
 </script>
 
 <div class="overlay" role="dialog" aria-modal="true" aria-label={wonder.title}>
-  <button class="backdrop" on:click={() => dispatch('close')} aria-label="Close"></button>
+  <button class="backdrop" on:click={() => dispatch('close')} aria-label="关闭"></button>
   <div class="panel">
     <header>
       <p class="kicker">
-        {justFound ? 'A small wonder found' : 'A small wonder'} · {biome.name}
+        {justFound ? '信标已点亮' : '信标'} · {biome.name}
       </p>
       <h2>{wonder.title}</h2>
       <p class="blurb">{wonder.blurb}</p>
-      <button class="close" on:click={() => dispatch('close')} aria-label="Close">
+      <button class="close" on:click={() => dispatch('close')} aria-label="关闭">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
       </button>
     </header>
@@ -55,12 +48,12 @@
             <div class="links">
               {#each item.links as link}
                 <a
-                  href={linkUrl(link.url)}
-                  target={isExternal(link.url) || link.url === resumePath ? '_blank' : undefined}
+                  href={link.url}
+                  target={isExternal(link.url) ? '_blank' : undefined}
                   rel={isExternal(link.url) ? 'noopener noreferrer' : undefined}
                 >
                   {link.label}
-                  {#if isExternal(link.url) || link.url === resumePath}<span aria-hidden="true">↗</span>{/if}
+                  {#if isExternal(link.url)}<span aria-hidden="true">↗</span>{/if}
                 </a>
               {/each}
             </div>
@@ -70,8 +63,8 @@
     </div>
 
     <footer>
-      <button class="continue" on:click={() => dispatch('close')}>Keep wandering</button>
-      <span class="esc">Esc or tap outside to close</span>
+      <button class="continue" on:click={() => dispatch('close')}>继续探索</button>
+      <span class="esc">Esc 或点击空白处关闭</span>
     </footer>
   </div>
 </div>
