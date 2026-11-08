@@ -127,3 +127,56 @@ export function nearBridge(d: THREE.Vector3, margin = BRIDGE_MARGIN): boolean {
   }
   return false;
 }
+
+const _seg = new THREE.Vector3();
+const _to = new THREE.Vector3();
+
+/**
+ * Tangent direction that leads away from the nearest bridge corridor, written
+ * into `out`. Used to walk a stray animal or crowd machine off a crossing.
+ */
+export function bridgeAway(d: THREE.Vector3, out: THREE.Vector3): void {
+  out.set(0, 0, 0);
+  for (const bridge of BRIDGES) {
+    const points = bridge.points;
+    if (points.length < 2) continue;
+    // Closest sample on this deck.
+    let best = 0;
+    let bestAng = Infinity;
+    for (let i = 0; i < points.length; i++) {
+      const ang = d.angleTo(points[i]);
+      if (ang < bestAng) {
+        bestAng = ang;
+        best = i;
+      }
+    }
+    const joint = points[best];
+    // Deck axis at that sample, as a tangent on the sphere.
+    const a = points[Math.max(0, best - 1)];
+    const b = points[Math.min(points.length - 1, best + 1)];
+    _seg.copy(b).addScaledVector(a, -1).addScaledVector(d, -(b.dot(d) - a.dot(d)));
+    if (_seg.lengthSq() < 1e-10) continue;
+    _seg.normalize();
+    // Where we stand relative to the deck line, in the tangent plane.
+    _to.copy(d).addScaledVector(joint, -joint.dot(d));
+    if (_to.lengthSq() < 1e-10) {
+      // Exactly on the deck: step off to one side.
+      _to.crossVectors(d, _seg);
+      if (_to.lengthSq() < 1e-10) continue;
+    }
+    _to.normalize();
+    const side = _to.dot(_seg);
+    _to.addScaledVector(_seg, -side);
+    if (_to.lengthSq() < 1e-10) {
+      _to.crossVectors(d, _seg);
+      if (_to.lengthSq() < 1e-10) continue;
+    }
+    _to.normalize();
+    // Nearer decks count for more.
+    const weight = 1 / (1 + bestAng * bestAng * 4000);
+    out.addScaledVector(_to, weight);
+  }
+  if (out.lengthSq() < 1e-10) out.crossVectors(d, new THREE.Vector3(0, 1, 0));
+  if (out.lengthSq() < 1e-10) out.set(1, 0, 0);
+  out.addScaledVector(d, -out.dot(d)).normalize();
+}

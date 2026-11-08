@@ -42,7 +42,7 @@ import { buildRobotDeer } from './wildlife';
 import { Aurora, SkyAurora } from './aurora';
 import { Constellations, Meteors, Moon, Planets, type PlanetTarget } from './sky';
 import { patchSurface, type SurfaceFx } from './surfaceFx';
-import { ColliderGrid } from './collision';
+import { ColliderGrid, nearBridge } from './collision';
 import { WONDERS, wonderAction, wonderDir, type Wonder } from './wonders';
 import { loadFound, saveFound } from './progress';
 import { Weather, weatherFor } from './weather';
@@ -53,7 +53,7 @@ import { Protagonist, type Form } from './robots/protagonist';
 import { TransformBurst } from './robots/burst';
 import { Crowd } from './robots/crowd';
 import type { SchemeId } from './robots/scheme';
-import { equip } from './models';
+import { equip, updateShadowBudget } from './models';
 import { controlState } from './ui/control';
 import {
   JOURNAL_BIOMES,
@@ -623,6 +623,14 @@ export class Game {
     if (this.globe) this.setGlobe(false);
     this.moveSpeed = 0;
     this.placePlayer();
+  }
+
+  /** Dev aid: which animals and crowd machines are on or beside a bridge. */
+  debugOnBridge(): { deer: string[]; crowd: number } {
+    return {
+      deer: this.critters.filter((c) => nearBridge(c.dir)).map((c) => c.id),
+      crowd: this.crowd.onBridge()
+    };
   }
 
   setOverlayOpen(open: boolean): void {
@@ -1504,6 +1512,11 @@ export class Game {
     // Machines nobody is driving look around on their own.
     this.idleState.time = t;
     for (const crew of this.crews) if (crew.rig !== this.player) crew.rig.update(dt, this.idleState);
+
+    // Far machines stop drawing into the shadow map; see `models`.
+    updateShadowBudget(this.crews.map((crew) => crew.rig), this.player);
+    // The picking spheres are invisible and must never drop a shadow.
+    for (const crew of this.crews) crew.rig.hit.castShadow = false;
 
     // Hand the pooled lights to whichever sources are nearest the active machine.
     this.lights.update(t, this.flying ? this.ship.position : this.player.root.position);

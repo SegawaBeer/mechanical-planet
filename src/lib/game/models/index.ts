@@ -167,8 +167,7 @@ function dress(scene: THREE.Object3D, entry: ModelEntry, form: ModelForm): THREE
  * Walking: a small rise and fall two steps per cycle, a little side roll, a
  * forward lean with speed, and a tuck in the air. Returns true on each foot
  * landing so the caller can play a step.
- */
-function robotAnim(inner: THREE.Object3D, entry: ModelEntry): Anim {
+ */function robotAnim(inner: THREE.Object3D, entry: ModelEntry): Anim {
   const bob = entry.bob || FALLBACK.bob;
   const sway = entry.sway || FALLBACK.sway;
   let phase = 0;
@@ -226,4 +225,50 @@ function vehicleAnim(inner: THREE.Object3D, entry: ModelEntry): Anim {
     inner.position.y = Math.sin(state.time * 1.3) * 0.012;
     return false;
   };
+}
+
+/** Beyond this distance from the player a machine stops casting shadow. */
+export const SHADOW_RANGE = 25;
+/** How often the shadow budget is re-checked, in milliseconds. */
+const SHADOW_INTERVAL = 180;
+
+const shadowOrigin = new THREE.Vector3();
+const shadowProbe = new THREE.Vector3();
+let shadowLast = -Infinity;
+
+function setCast(root: THREE.Object3D, cast: boolean): void {
+  root.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    // Pick spheres and other fully transparent helpers must never shadow,
+    // otherwise a grey ball appears under the machine.
+    if (materials.every((m) => m.transparent && m.opacity === 0)) {
+      if (mesh.castShadow) mesh.castShadow = false;
+      return;
+    }
+    if (mesh.castShadow !== cast) mesh.castShadow = cast;
+  });
+}
+
+/**
+ * Distance-based shadow budget. Machines further than `SHADOW_RANGE` from the
+ * player stop casting, which halves the geometry drawn into the shadow map.
+ * The player and the machine being driven always keep their shadow.
+ *
+ * Call once per frame with every machine and the one currently being driven;
+ * the check itself is throttled, so the call is cheap.
+ */
+export function updateShadowBudget(machines: Protagonist[], player: Protagonist): void {
+  const now = performance.now();
+  if (now - shadowLast < SHADOW_INTERVAL) return;
+  shadowLast = now;
+
+  player.root.getWorldPosition(shadowOrigin);
+  for (const machine of machines) {
+    const near =
+      machine === player ||
+      machine.root.getWorldPosition(shadowProbe).distanceTo(shadowOrigin) <= SHADOW_RANGE;
+    setCast(machine.root, near);
+  }
 }

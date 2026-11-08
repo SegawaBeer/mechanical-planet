@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { PLANET_RADIUS, isOcean, tangentBasis, walkRadius } from './planet';
 import type { AnimalData, Gait } from './character';
-import { nearBridge, type ColliderGrid } from './collision';
+import { bridgeAway, nearBridge, type ColliderGrid } from './collision';
 
 /** Footprint radius of a critter, in surface units. */
 const CRITTER_RADIUS = 0.5;
@@ -17,6 +17,7 @@ const FOLLOW_TIME = 75;
 const _right = new THREE.Vector3();
 const _fwd = new THREE.Vector3();
 const _to = new THREE.Vector3();
+const _prev = new THREE.Vector3();
 const _m = new THREE.Matrix4();
 
 /**
@@ -167,8 +168,10 @@ export class Critter {
       }
     }
     if (nearBridge(this.dir)) {
-      // Standing on a crossing or its ends blocks the player: head inland.
-      this.target = this.home.clone();
+      // Standing on a crossing or its ends blocks the player: walk off it.
+      bridgeAway(this.dir, _to);
+      const step = 4 / PLANET_RADIUS;
+      this.target = this.dir.clone().multiplyScalar(Math.cos(step)).addScaledVector(_to, Math.sin(step)).normalize();
       this.wait = 0;
     }
     if (this.wait > 0) {
@@ -203,7 +206,18 @@ export class Critter {
     _to.normalize();
     this.heading.lerp(_to, Math.min(1, dt * 4)).addScaledVector(this.dir, -this.heading.dot(this.dir)).normalize();
     const ang = (this.speed * dt) / PLANET_RADIUS;
+    const wasClear = !nearBridge(this.dir);
+    _prev.copy(this.dir);
     this.dir.multiplyScalar(Math.cos(ang)).addScaledVector(this.heading, Math.sin(ang)).normalize();
+    if (wasClear && nearBridge(this.dir)) {
+      // Never walk onto a crossing from dry ground: the player needs it free.
+      this.dir.copy(_prev);
+      this.target = null;
+      this.wait = 0.6 + Math.random();
+      this.idle(time);
+      this.place();
+      return;
+    }
     if (this.colliders?.resolve(this.dir, CRITTER_RADIUS)) {
       // Pressed against something: drop the target after a moment and wander elsewhere.
       this.stuck += dt;

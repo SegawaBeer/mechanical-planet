@@ -8,7 +8,7 @@ import { buildRobot, type FormAnim, type FormState } from './robot';
 import { SCHEMES } from './scheme';
 import { biomeById, isOcean } from '../biomes';
 import { offsetDir, surfaceNormal, walkRadius } from '../planet';
-import { nearBridge, type ColliderGrid } from '../collision';
+import { bridgeAway, nearBridge, type ColliderGrid } from '../collision';
 
 type ZoneId = 'river' | 'citadel' | 'ark' | 'fortress';
 const ZONES: ZoneId[] = ['river', 'citadel', 'ark', 'fortress'];
@@ -102,7 +102,17 @@ function stepToward(dir: THREE.Vector3, heading: THREE.Vector3, dist: number, ou
  * it leaves the water. */
 function landNear(centre: THREE.Vector3, east: number, north: number): THREE.Vector3 {
   const point = offsetDir(centre.clone(), east, north);
-  for (let i = 0; i < 14 && (isOcean(point) || nearBridge(point)); i++) offsetDir(point, -east * 0.14, -north * 0.14);
+  for (let i = 0; i < 24 && (isOcean(point) || nearBridge(point)); i++) {
+    if (isOcean(point)) {
+      offsetDir(point, -east * 0.12, -north * 0.12);
+    } else {
+      // Step sideways off the crossing rather than inward: the decks meet at
+      // the middle of the island, so inward is still bridge.
+      bridgeAway(point, _step);
+      const ang = 2.5 / 42;
+      point.multiplyScalar(Math.cos(ang)).addScaledVector(_step, Math.sin(ang)).normalize();
+    }
+  }
   return point;
 }
 
@@ -144,7 +154,17 @@ export class Crowd {
 
       // One duelling pair, three units apart, facing each other.
       const a = landNear(centre, -6, 5.5);
-      const b = landNear(centre, -6, 5.5 - DUEL_GAP);
+      // The partner stands the duel gap to one side of the first, still clear
+      // of the crossings.
+      const b = a.clone();
+      bridgeAway(a, _step);
+      const gapAng = DUEL_GAP / 42;
+      const probe = a.clone().multiplyScalar(Math.cos(gapAng)).addScaledVector(_step, Math.sin(gapAng)).normalize();
+      if (!nearBridge(probe) && !isOcean(probe)) b.copy(probe);
+      else {
+        const back = a.clone().multiplyScalar(Math.cos(gapAng)).addScaledVector(_step, -Math.sin(gapAng)).normalize();
+        if (!nearBridge(back) && !isOcean(back)) b.copy(back);
+      }
       const actorA = this.addActor(zone, a, 0, null);
       const actorB = this.addActor(zone, b, 0, null);
       actorA.kind = 'duel';
@@ -157,6 +177,11 @@ export class Crowd {
 
     for (let i = 0; i < 16; i++) this.bolts.push(this.makeBolt());
     for (let i = 0; i < 12; i++) this.flashes.push(this.makeFlash());
+  }
+
+  /** Dev aid: how many walkers are on a crossing or its bridgehead. */
+  onBridge(): number {
+    return this.actors.filter((a) => nearBridge(a.dir)).length;
   }
 
   /** Every crowd machine's position, for the driven machine to collide with. */
@@ -221,9 +246,11 @@ export class Crowd {
       actor.anim(dt, this.idle);
       return;
     }
-    // A walker that has drifted onto a crossing heads straight back inland.
+    // A walker that has drifted onto a crossing walks off it.
     if (nearBridge(actor.dir)) {
-      actor.target.copy(biomeById(actor.zone).center);
+      bridgeAway(actor.dir, _step);
+      const ang = 4 / 42;
+      actor.target.copy(actor.dir).multiplyScalar(Math.cos(ang)).addScaledVector(_step, Math.sin(ang)).normalize();
     }
     headingToward(actor.dir, actor.target, actor.heading);
     const left = actor.dir.angleTo(actor.target) * 42;
@@ -231,8 +258,9 @@ export class Crowd {
       this.pickWaypoint(actor);
       return;
     }
+    const wasClear = !nearBridge(actor.dir);
     stepToward(actor.dir, actor.heading, PATROL_SPEED * dt, _step);
-    if (isOcean(_step)) {
+    if (isOcean(_step) || (wasClear && nearBridge(_step))) {
       this.pickWaypoint(actor);
       return;
     }
