@@ -500,7 +500,7 @@ function zoneGround(b: Biome, d: THREE.Vector3, f: number, out: THREE.Color): TH
   obsidian(palette[i1], _tone);
   out.lerp(_tone, t - i0);
   const shade =
-    (0.72 + plate.tone * 0.5) *
+    (0.55 + plate.tone * 0.62) *
     (1 + THREE.MathUtils.clamp(fbm3(d.x * 7.3 - 4, d.y * 7.3 + 8, d.z * 7.3 - 6, 2), -1, 1) * 0.07);
   out.multiplyScalar(shade);
   // Saturated colour lives on the cut edge: a thin lip of the zone accent runs
@@ -508,8 +508,8 @@ function zoneGround(b: Biome, d: THREE.Vector3, f: number, out: THREE.Color): TH
   const lip = 1 - THREE.MathUtils.smoothstep(margin, 0.08, 1.5);
   if (lip > 0) {
     _edge.setHex(b.accent).getHSL(_hsl);
-    _edge.setHSL(_hsl.h, Math.min(0.95, _hsl.s + 0.25), 0.24);
-    out.lerp(_edge, lip * 0.6);
+    _edge.setHSL(_hsl.h, Math.min(0.95, _hsl.s + 0.25), 0.3);
+    out.lerp(_edge, lip * 0.7);
   }
   // The bank is cut metal with one bright lip where the sheet meets the stone.
   if (f < 4) {
@@ -582,9 +582,9 @@ export function buildGround(): THREE.Mesh {
     new THREE.MeshStandardMaterial({
       vertexColors: true,
       flatShading: true,
-      roughness: 0.34,
+      roughness: 0.3,
       metalness: 0.88,
-      envMapIntensity: 0.95
+      envMapIntensity: 1.2
     }),
     { strength: 0.045, scale: 0.85, color: 0x63d8f0 }
   );

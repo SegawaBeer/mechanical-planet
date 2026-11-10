@@ -87,8 +87,8 @@ function deepHex(hex: number, value = 0.07): number {
 
 /** A big fractured slab, leaning, with broken plates piled at its foot. */
 function slabPlate(c: Ctx, f: THREE.Matrix4, biome: Biome): void {
-  const w = rnd(c, 1.0, 3.0);
-  const h = rnd(c, 1.3, 4.0);
+  const w = rnd(c, 0.9, 2.3);
+  const h = rnd(c, 1.1, 3.1);
   const t = rnd(c, 0.2, 0.48);
   const toneA = deepHex(biome.ground[0]);
   const toneB = deepHex(biome.ground[1] ?? biome.ground[0]);
@@ -128,8 +128,8 @@ function slabPlate(c: Ctx, f: THREE.Matrix4, biome: Biome): void {
 
 /** A thin, sharp fin of plate rising out of a fault. */
 function bladeFin(c: Ctx, f: THREE.Matrix4, biome: Biome): void {
-  const h = rnd(c, 1.6, 4.4);
-  const w = rnd(c, 0.5, 1.4);
+  const h = rnd(c, 1.3, 3.4);
+  const w = rnd(c, 0.45, 1.15);
   const t = rnd(c, 0.12, 0.26);
   part(c.solid, G.tetra, deepHex(biome.ground[2] ?? biome.ground[0]), f, {
     p: [rnd(c, -0.15, 0.15), 0, rnd(c, -0.15, 0.15)],
@@ -313,10 +313,17 @@ export function buildWorldProps(seed: number): WorldProps {
     // overhang the carriageway even if its centre were clear of it.
     if (onRoad(d, 3.2)) continue;
     const fault = faultWeight(d);
-    if (fault < 0.02 || ctx.rng() > fault * 0.5) continue;
+    // Slabs belong to a few stretches of seam, not every seam. A low-frequency
+    // cluster field leaves most faults bare, so the planet reads as plate
+    // country with a handful of monoliths instead of a carpet of shards.
+    const cluster = fbm3(d.x * 3.1 + 41, d.y * 3.1 - 17, d.z * 3.1 + 9, 2);
+    if (fault < 0.02 || cluster < 0.08) continue;
+    if (ctx.rng() > fault * 0.14 * (0.35 + cluster)) continue;
     if (excluded(d)) continue;
     const biome = landBiomeAt(d);
-    surfaceFrame(d, ctx.rng() * Math.PI * 2, f);
+    // Bed each piece a little into the plate so a slab seated across a crease
+    // cuts the ground instead of hovering over the low side of it.
+    surfaceFrame(d, ctx.rng() * Math.PI * 2, f, -0.12);
     const pickR = ctx.rng();
     if (pickR < 0.52) slabPlate(ctx, f, biome);
     else if (pickR < 0.8) bladeFin(ctx, f, biome);
