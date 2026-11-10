@@ -53,11 +53,12 @@ export const BIOMES: Biome[] = [
     index: '01',
     tagline: '星球的能量脉络在峡谷间奔流。',
     center: TETRA[0].clone(),
-    // Cold steel teal: the metal that the river canyons cut through.
-    ground: [0x6ea4ac, 0x93c4c6, 0x537c85],
-    accent: 0x2fe6ff,
-    beach: 0x5aa0a8,
-    seam: 0x3f7980
+    // Deep ice-teal rock: cold, dark plates that hold a shadow, so the glowing
+    // channel inside the canyon is the brightest thing in the zone.
+    ground: [0x2f7c84, 0x3c9298, 0x245f68],
+    accent: 0x35f0ff,
+    beach: 0x2a626b,
+    seam: 0x0d2a32
   },
   {
     id: 'citadel',
@@ -66,11 +67,13 @@ export const BIOMES: Biome[] = [
     index: '02',
     tagline: '层层塔楼守着最后的灯火。',
     center: TETRA[1].clone(),
-    // Sunny silver-white, with a gold plate now and then for warmth.
-    ground: [0xeae8e2, 0xd4d8d7, 0xb7bcba, 0xe3b552],
-    accent: 0xffd98a,
-    beach: 0xb3a488,
-    seam: 0x8d8574
+    // Silver metal plates, kept a few stops under white so a strong key still
+    // leaves a lit and a shaded face. The gold is in the towers, not the plain:
+    // a gold plate across the continent turns the whole zone yellow from orbit.
+    ground: [0xc2c6ca, 0xa6adb3, 0x8f979e],
+    accent: 0xffc65a,
+    beach: 0x9a9484,
+    seam: 0x5c636b
   },
   {
     id: 'ark',
@@ -79,11 +82,12 @@ export const BIOMES: Biome[] = [
     index: '03',
     tagline: '沉睡的巨舰半埋在大地里。',
     center: TETRA[2].clone(),
-    // Dopamine patchwork: five saturated plates, picked at random.
-    ground: [0xff5d8f, 0xff9f43, 0xffd93d, 0x3ddbb5, 0x4d7cff],
-    accent: 0xfff0f4,
-    beach: 0xd9c2a8,
-    seam: 0x8a4a72
+    // Dopamine patchwork: five saturated plates, picked at random. Held a
+    // little under full brightness so the candy colour survives the key light.
+    ground: [0xf02a6b, 0xff7a1a, 0xffcc00, 0x00c896, 0x2a52ff],
+    accent: 0xffe9f0,
+    beach: 0xc9a37e,
+    seam: 0x6f2f5f
   },
   {
     id: 'fortress',
@@ -92,10 +96,10 @@ export const BIOMES: Biome[] = [
     index: '04',
     tagline: '越靠近，越危险。',
     center: TETRA[3].clone(),
-    // Purple black with magenta-lit seams.
-    ground: [0x2b2135, 0x3d2c4f, 0x241b2e],
+    // Purple black, with the magenta edge light coming from the seams.
+    ground: [0x2a1b3a, 0x3a2050, 0x1a1024],
     accent: 0xff2f8a,
-    beach: 0x4a2f56,
+    beach: 0x3d2247,
     seam: 0xff2f8a
   }
 ];

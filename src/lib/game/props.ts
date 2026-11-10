@@ -3,10 +3,10 @@
 // and bakes everything into the three merged meshes described in `kit.ts`.
 
 import * as THREE from 'three';
-import { biomeById, landBiomeAt, oceanField } from './biomes';
+import { biomeById, landBiomeAt, landBiomeBlend, oceanField } from './biomes';
 import { deriveSeed, fbm3, seededRng } from './noise';
 import { PLANET_RADIUS, offsetDir, surfaceFrame } from './planet';
-import { onRoad, roadBlocks, roadPieces } from './roads';
+import { onRoad, roadBlocks, roadDistance, roadPieces } from './roads';
 import type { Collider } from './collision';
 import type { Emitter } from './lights';
 import { PropBatch, type Ctx } from './kit';
@@ -30,12 +30,26 @@ const ZONES: Record<ZoneId, ZoneModule> = {
  * each zone's own probabilities cut this down a lot; raise it to make the
  * whole planet busier.
  */
-const SCATTER_SAMPLES = 9000;
+const SCATTER_SAMPLES = 6000;
 
-/** Local density multiplier, so props gather in clusters with open ground between. */
+/** Clumping noise, so what survives gathers into small groups, not even rows. */
 function clumpAt(d: THREE.Vector3): number {
   const n = fbm3(d.x * 5.5 + 31, d.y * 5.5 - 13, d.z * 5.5 + 7, 2);
-  return Math.max(0.22, Math.min(1.2, 0.72 + n * 0.75));
+  return Math.max(0.55, Math.min(1.25, 0.9 + n * 0.6));
+}
+
+/**
+ * Chance that a scattered prop stands at `d`. Detail belongs to the landmark
+ * ring around a zone heart and to the shoulder of the carriageway; the open
+ * plain between them stays almost empty, so the ground plate, not a carpet of
+ * small blocks, is what the eye reads.
+ */
+function scatterWeight(d: THREE.Vector3): number {
+  const blend = landBiomeBlend(d);
+  const fromHeart = d.angleTo(blend.primary.center) * PLANET_RADIUS;
+  const nearLandmark = 1 - THREE.MathUtils.smoothstep(fromHeart, 9, 23);
+  const nearRoad = 1 - THREE.MathUtils.smoothstep(roadDistance(d), 2.4, 7);
+  return Math.max(0.07, Math.max(nearLandmark * 0.55, nearRoad * 0.4));
 }
 
 export type Dynamic = { object: THREE.Object3D; update: (dt: number, t: number) => void };
@@ -106,7 +120,7 @@ export function buildWorldProps(seed: number): WorldProps {
     if (oceanField(d) < 1.5) continue;
     // Keep the carriageway, its margins and the ground under a bridge clear.
     if (onRoad(d, 1.6)) continue;
-    if (ctx.rng() > clumpAt(d)) continue;
+    if (ctx.rng() > scatterWeight(d) * clumpAt(d)) continue;
     if (exclusions.some((ex) => d.angleTo(ex.dir) * PLANET_RADIUS < ex.radius)) continue;
     const table = ZONES[landBiomeAt(d).id as ZoneId].scatter;
     let r = ctx.rng();

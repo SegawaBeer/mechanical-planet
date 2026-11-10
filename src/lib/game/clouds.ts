@@ -3,6 +3,8 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { deriveSeed, seededRng } from './noise';
 import { PLANET_RADIUS } from './planet';
 import type { PlanetProfile } from './space';
+import { landBiomeBlend } from './biomes';
+import { GLOBE_ATMOSPHERE, SKY_GRADIENT, type SkyGradient } from './night';
 
 type Satellite = {
   mesh: THREE.Mesh;
@@ -156,6 +158,127 @@ function buildSatellite(variant: number): THREE.BufferGeometry {
 }
 
 /**
+ * The sky as a vertical gradient rather than one flat colour. A big inverted
+ * sphere follows the camera; the gradient is measured against the planet's
+ * radial up, so the horizon really is the horizon wherever the player stands.
+ * Near the globe camera distance the dome fades out into space and the orbit
+ * background takes over.
+ */
+class SkyDome {
+  readonly mesh: THREE.Mesh;
+  private mat: THREE.ShaderMaterial;
+  private target = {
+    zenith: new THREE.Color(),
+    horizon: new THREE.Color(),
+    haze: new THREE.Color(),
+    space: 0
+  };
+  private up = new THREE.Vector3(0, 1, 0);
+  private ready = false;
+
+  constructor() {
+    this.mat = new THREE.ShaderMaterial({
+      uniforms: {
+        uZenith: { value: new THREE.Color() },
+        uHorizon: { value: new THREE.Color() },
+        uHaze: { value: new THREE.Color() },
+        uSpace: { value: GLOBE_ATMOSPHERE.sky.clone() },
+        uUp: { value: new THREE.Vector3(0, 1, 0) },
+        uSpaceMix: { value: 0 }
+      },
+      vertexShader: /* glsl */ `
+        varying vec3 vDir;
+        void main() {
+          vDir = position;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        varying vec3 vDir;
+        uniform vec3 uZenith;
+        uniform vec3 uHorizon;
+        uniform vec3 uHaze;
+        uniform vec3 uSpace;
+        uniform vec3 uUp;
+        uniform float uSpaceMix;
+
+        void main() {
+          vec3 dir = normalize(vDir);
+          float h = dot(dir, normalize(uUp));
+          // Dark overhead, pale at the horizon.
+          float t = smoothstep(-0.04, 0.62, h);
+          vec3 col = mix(uHorizon, uZenith, pow(t, 0.8));
+          // A band of haze lying on the horizon line.
+          float band = pow(1.0 - clamp(abs(h) * 2.2, 0.0, 1.0), 5.0);
+          col = mix(col, uHaze, band * 0.4);
+          col = mix(col, uSpace, uSpaceMix);
+          // One part in 255 of noise: 8-bit gradients band without it.
+          float n = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+          col += (n - 0.5) * 0.006;
+          gl_FragColor = vec4(col, 1.0);
+          #include <colorspace_fragment>
+        }
+      `,
+      side: THREE.BackSide,
+      depthWrite: false,
+      depthTest: false,
+      fog: false
+    });
+    this.mesh = new THREE.Mesh(new THREE.SphereGeometry(800, 32, 16), this.mat);
+    this.mesh.name = 'sky-dome';
+    this.mesh.renderOrder = -10000;
+    this.mesh.frustumCulled = false;
+    this.mesh.onBeforeRender = (_r, _s, camera) => this.follow(camera);
+    this.mesh.matrixAutoUpdate = false;
+  }
+
+  /** Follow the camera and pick the sky of the zone the eye is standing in. */
+  private follow(camera: THREE.Camera): void {
+    const cam = camera as THREE.PerspectiveCamera;
+    if (!cam.isPerspectiveCamera) return;
+    this.mesh.position.copy(cam.position);
+    this.mesh.updateMatrix();
+    this.mesh.updateMatrixWorld();
+
+    // The eye's up is the radial direction from the planet centre.
+    this.up.copy(cam.position);
+    if (this.up.lengthSq() < 1e-6) this.up.set(0, 1, 0);
+    else this.up.normalize();
+    (this.mat.uniforms.uUp.value as THREE.Vector3).copy(this.up);
+
+    const dist = cam.position.length();
+    this.target.space = THREE.MathUtils.smoothstep(dist, 78, 118);
+
+    const blend = landBiomeBlend(this.up);
+    const a: SkyGradient = SKY_GRADIENT[blend.primary.id];
+    const b: SkyGradient = SKY_GRADIENT[blend.secondary.id];
+    const w = blend.mix;
+    this.target.zenith.copy(a.zenith).lerp(b.zenith, w);
+    this.target.horizon.copy(a.horizon).lerp(b.horizon, w);
+    this.target.haze.copy(a.haze).lerp(b.haze, w);
+
+    if (!this.ready) {
+      this.ready = true;
+      this.apply(1);
+    }
+  }
+
+  /** Move the uniforms toward the zone the camera has arrived in. */
+  update(dt: number): void {
+    if (!this.ready) return;
+    this.apply(1 - Math.exp(-dt * 2.6));
+  }
+
+  private apply(k: number): void {
+    const u = this.mat.uniforms;
+    (u.uZenith.value as THREE.Color).lerp(this.target.zenith, k);
+    (u.uHorizon.value as THREE.Color).lerp(this.target.horizon, k);
+    (u.uHaze.value as THREE.Color).lerp(this.target.haze, k);
+    u.uSpaceMix.value += (this.target.space - (u.uSpaceMix.value as number)) * k;
+  }
+}
+
+/**
  * Derelict satellites drifting above the planet, plus one huge ringed planet
  * hanging far out in the sky. Every satellite is one merged, vertex-coloured
  * mesh — three geometries and two materials are shared by all of them — with a
@@ -164,6 +287,7 @@ function buildSatellite(variant: number): THREE.BufferGeometry {
 export class Clouds {
   group = new THREE.Group();
   private satellites: Satellite[] = [];
+  private sky = new SkyDome();
   private time = 0;
   private _q = new THREE.Quaternion();
   private _x = new THREE.Vector3();
@@ -177,6 +301,7 @@ export class Clouds {
 
     this.buildRingedPlanet();
     this.buildSatellites(rng);
+    this.group.add(this.sky.mesh);
 
     if (profile.archetype === 'fracture' || profile.archetype === 'rime') {
       const debrisCount = profile.archetype === 'fracture' ? 30 : 18;
@@ -317,6 +442,7 @@ export class Clouds {
 
   update(dt: number): void {
     this.time += dt;
+    this.sky.update(dt);
     const t = this.time;
     for (const s of this.satellites) {
       const a = s.phase + s.speed * t;
