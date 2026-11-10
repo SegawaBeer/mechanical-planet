@@ -171,6 +171,18 @@ const FLIGHT_TURN = 1.35;
 const LANDING_APPROACH = 16;
 const LANDING_DURATION = 2.4;
 
+/** Ship parts and critter species are stored under English keys; show Chinese. */
+const PART_LABEL: Record<string, string> = {
+  'Hull Plating': '船壳装甲',
+  'Cockpit Canopy': '驾驶舱罩',
+  'Port Wing': '左翼',
+  'Starboard Wing': '右翼',
+  'Thruster Core': '推进核心'
+};
+const CRITTER_LABEL: Record<string, string> = { 'robot deer': '机械鹿' };
+const partLabel = (part: string): string => PART_LABEL[part] ?? part;
+const critterLabel = (name: string): string => CRITTER_LABEL[name] ?? name;
+
 const _e = new THREE.Euler();
 
 const _v1 = new THREE.Vector3();
@@ -656,16 +668,17 @@ export class Game {
 
   /** Current ship objective, fuel, and planet identity for the HUD. */
   get spaceStatus(): SpaceStatus {
+    const home = this.seed === EARTH_SEED;
     return {
       parts: this.parts?.foundCount ?? this.shipProgress.parts.length,
       totalParts: SHIP_PARTS.length,
       crafted: this.shipProgress.crafted,
       fuel: this.shipProgress.fuel,
       maxFuel: MAX_FUEL,
-      planetName: this.profile.name,
-      planetKind: this.profile.kind,
+      planetName: home ? '机械星球' : this.profile.name,
+      planetKind: home ? '星球' : this.profile.kind,
       depth: this.depth,
-      isEarth: this.seed === EARTH_SEED
+      isEarth: home
     };
   }
 
@@ -680,8 +693,8 @@ export class Game {
     this.audio.sparkle();
     this.callbacks.onSpace(this.spaceStatus);
     this.callbacks.onSpaceNotice({
-      kicker: 'Landing pad recharge',
-      text: `Fuel cells restored · +${added} fuel`
+      kicker: '停机坪补给',
+      text: `燃料已补满 · +${added} 燃料`
     });
     this.promptId = null;
   }
@@ -692,8 +705,8 @@ export class Game {
     const target = this.planets.targets.find(({ destination }) => destination.fuelCost <= this.shipProgress.fuel);
     if (!target) {
       this.callbacks.onSpaceNotice({
-        kicker: 'Flight computer',
-        text: 'Collect starlight shards, or recall Earth for a full recharge'
+        kicker: '飞船电脑',
+        text: '收集能量晶块，或返回机械星球把燃料补满'
       });
       return;
     }
@@ -728,7 +741,7 @@ export class Game {
     surfaceFrame(this.shipDir, -0.35, _m, 0.08).decompose(this.ship.position, this.ship.quaternion, this.ship.scale);
     this.transition = 1.2;
     this.callbacks.onFlight(false);
-    this.callbacks.onSpaceNotice({ kicker: 'Flight computer', text: 'Returned to the landing pad' });
+    this.callbacks.onSpaceNotice({ kicker: '飞船电脑', text: '已返回停机坪' });
   }
 
   toggleMute(): boolean {
@@ -1151,8 +1164,8 @@ export class Game {
       saveShipProgress(this.shipProgress);
       this.callbacks.onSpace(this.spaceStatus);
       this.callbacks.onSpaceNotice({
-        kicker: 'Starship fuel',
-        text: `Starlight refined · +${this.shipProgress.fuel - before} fuel`
+        kicker: '飞船燃料',
+        text: `晶块已精炼 · +${this.shipProgress.fuel - before} 燃料`
       });
     }
     if (this.shards.foundCount >= this.shards.total) {
@@ -1173,10 +1186,10 @@ export class Game {
     this.callbacks.onSpace(this.spaceStatus);
     const complete = this.shipProgress.parts.length >= SHIP_PARTS.length;
     this.callbacks.onSpaceNotice({
-      kicker: complete ? 'Starship ready' : 'Part recovered',
+      kicker: complete ? '飞船就绪' : '找回一个部件',
       text: complete
-        ? `${SHIP_PARTS[idx]} found · return to the landing pad`
-        : `${SHIP_PARTS[idx]} · ${this.shipProgress.parts.length}/${SHIP_PARTS.length}`
+        ? `${partLabel(SHIP_PARTS[idx])}已归位 · 回停机坪组装`
+        : `${partLabel(SHIP_PARTS[idx])} · ${this.shipProgress.parts.length}/${SHIP_PARTS.length}`
     });
     this.promptId = null;
   }
@@ -1658,8 +1671,8 @@ export class Game {
     this.landingEndRotation.setFromRotationMatrix(_m);
     this.planets.beginLanding(target);
     this.callbacks.onSpaceNotice({
-      kicker: 'Landing approach',
-      text: `Descending to ${target.destination.name}`
+      kicker: '准备降落',
+      text: `正在降落：${target.destination.name}`
     });
   }
 
@@ -1711,8 +1724,8 @@ export class Game {
       if (target.destination.fuelCost > this.shipProgress.fuel) {
         if (this.flightWarning === 0) {
           this.callbacks.onSpaceNotice({
-            kicker: 'Route locked',
-            text: `${target.destination.name} needs ${target.destination.fuelCost} fuel`
+            kicker: '航线未解锁',
+            text: `${target.destination.name} 需要 ${target.destination.fuelCost} 点燃料`
           });
           this.flightWarning = 2.5;
         }
@@ -1738,8 +1751,8 @@ export class Game {
       const missing = SHIP_PARTS.length - this.shipProgress.parts.length;
       if (missing > 0) {
         this.callbacks.onSpaceNotice({
-          kicker: 'Wrecked starship',
-          text: `Recover ${missing} more ${missing === 1 ? 'part' : 'parts'} before crafting`
+          kicker: '坠毁的飞船',
+          text: `还差 ${missing} 个部件才能组装`
         });
         return;
       }
@@ -1750,8 +1763,8 @@ export class Game {
       this.audio.sparkle();
       this.callbacks.onSpace(this.spaceStatus);
       this.callbacks.onSpaceNotice({
-        kicker: 'Starship crafted',
-        text: 'Engines online · board the ship to venture into space'
+        kicker: '飞船组装完成',
+        text: '引擎已启动 · 登船飞向太空'
       });
       this.promptId = null;
       return;
@@ -1851,17 +1864,18 @@ export class Game {
       const missing = SHIP_PARTS.length - this.shipProgress.parts.length;
       prompt = this.shipProgress.crafted
         ? this.seed === EARTH_SEED && this.shipProgress.fuel < MAX_FUEL
-          ? { id: 'ship-refuel', action: 'Refuel spaceship', found: false, kicker: `${this.shipProgress.fuel}/${MAX_FUEL} fuel · full landing-pad recharge` }
-          : { id: 'ship-board', action: 'Board ship', found: false, kicker: `${this.shipProgress.fuel}/${MAX_FUEL} fuel · fly to a planet` }
+          ? { id: 'ship-refuel', action: '补充飞船燃料', found: false, kicker: `${this.shipProgress.fuel}/${MAX_FUEL} 燃料 · 停机坪可充满` }
+          : { id: 'ship-board', action: '登上飞船', found: false, kicker: `${this.shipProgress.fuel}/${MAX_FUEL} 燃料 · 飞往其他星球` }
         : missing === 0
-          ? { id: 'ship-craft', action: 'Craft your spaceship', found: false, kicker: 'All five parts recovered' }
-          : { id: `ship-parts-${missing}`, action: `Recover ${missing} more ${missing === 1 ? 'part' : 'parts'}`, found: false, kicker: 'Wrecked starship' };
+          ? { id: 'ship-craft', action: '组装飞船', found: false, kicker: '五个部件都已回收' }
+          : { id: `ship-parts-${missing}`, action: `还差 ${missing} 个飞船部件`, found: false, kicker: '坠毁的飞船' };
     } else if (pal) {
+      const animal = critterLabel(pal.name);
       prompt = {
         id: `pet-${pal.id}${pal.following ? '-friend' : pal.petted ? '-again' : ''}`,
-        action: pal.following ? `Pet your ${pal.name}` : pal.petted ? `Say hello to the ${pal.name}` : `Pet the ${pal.name}`,
+        action: pal.following ? `和${animal}亲近一下` : pal.petted ? `向${animal}打个招呼` : `抚摸${animal}`,
         found: false,
-        kicker: pal.following ? 'Your companion' : pal.petted ? 'Pet again to make a friend' : 'A curious animal'
+        kicker: pal.following ? '你的同伴' : pal.petted ? '再摸一次就能交个朋友' : '一只好奇的机械兽'
       };
     }
     const id = prompt?.id ?? null;

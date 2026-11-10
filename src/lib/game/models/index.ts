@@ -129,11 +129,17 @@ function dress(scene: THREE.Object3D, entry: ModelEntry, form: ModelForm): THREE
 
   const box2 = new THREE.Box3().setFromObject(inner);
   const centre = box2.getCenter(new THREE.Vector3());
-  inner.position.set(-centre.x, -box2.min.y, -centre.z);
+  // How far the model had to be lifted so its lowest point rests on y = 0.
+  // The animations below own `inner.position.y` and must add this back, or a
+  // model authored around its centre sinks by half its height.
+  const seatY = -box2.min.y;
+  inner.userData.seatY = seatY;
+  inner.position.set(-centre.x, seatY, -centre.z);
 
   const root = new THREE.Group();
   root.add(inner);
-  root.userData.anim = form === 'robot' ? robotAnim(inner, entry) : vehicleAnim(inner, entry);
+  root.userData.anim =
+    form === 'robot' ? robotAnim(inner, entry, seatY) : vehicleAnim(inner, entry, seatY);
 
   root.traverse((o) => {
     const mesh = o as THREE.Mesh;
@@ -167,7 +173,7 @@ function dress(scene: THREE.Object3D, entry: ModelEntry, form: ModelForm): THREE
  * Walking: a small rise and fall two steps per cycle, a little side roll, a
  * forward lean with speed, and a tuck in the air. Returns true on each foot
  * landing so the caller can play a step.
- */function robotAnim(inner: THREE.Object3D, entry: ModelEntry): Anim {
+ */function robotAnim(inner: THREE.Object3D, entry: ModelEntry, seatY: number): Anim {
   const bob = entry.bob || FALLBACK.bob;
   const sway = entry.sway || FALLBACK.sway;
   let phase = 0;
@@ -191,7 +197,7 @@ function dress(scene: THREE.Object3D, entry: ModelEntry, form: ModelForm): THREE
     }
 
     if (state.airborne) {
-      inner.position.y = bob * 0.55;
+      inner.position.y = seatY + bob * 0.55;
       inner.rotation.z = 0;
       inner.rotation.x = -0.08;
       return false;
@@ -199,7 +205,7 @@ function dress(scene: THREE.Object3D, entry: ModelEntry, form: ModelForm): THREE
 
     const gait = moving ? 0.45 + speed01 * 0.55 : 0;
     const breathe = Math.sin(state.time * 1.5) * bob * 0.16;
-    inner.position.y = Math.abs(Math.sin(phase)) * bob * gait + breathe;
+    inner.position.y = seatY + Math.abs(Math.sin(phase)) * bob * gait + breathe;
     inner.rotation.z = moving
       ? Math.sin(phase) * sway * gait
       : Math.sin(state.time * 1.1) * sway * 0.18;
@@ -212,7 +218,7 @@ function dress(scene: THREE.Object3D, entry: ModelEntry, form: ModelForm): THREE
  * Driving: roll into a turn the same direction as the built-in vehicle, a
  * small pitch with speed, and a slow float when parked. Never a footstep.
  */
-function vehicleAnim(inner: THREE.Object3D, entry: ModelEntry): Anim {
+function vehicleAnim(inner: THREE.Object3D, entry: ModelEntry, seatY: number): Anim {
   const roll = entry.roll || FALLBACK.roll;
   let shown = 0;
 
@@ -222,7 +228,7 @@ function vehicleAnim(inner: THREE.Object3D, entry: ModelEntry): Anim {
     shown += (target - shown) * Math.min(1, dt * 9);
     inner.rotation.z = shown;
     inner.rotation.x = -0.02 * THREE.MathUtils.clamp(state.speed01, 0, 1);
-    inner.position.y = Math.sin(state.time * 1.3) * 0.012;
+    inner.position.y = seatY + Math.sin(state.time * 1.3) * 0.012;
     return false;
   };
 }

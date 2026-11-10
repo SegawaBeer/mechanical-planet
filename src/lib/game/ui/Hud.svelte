@@ -13,8 +13,8 @@
     crafted: false,
     fuel: 0,
     maxFuel: MAX_FUEL,
-    planetName: 'Mechanical Planet',
-    planetKind: '机械星球',
+    planetName: '机械星球',
+    planetKind: '星球',
     depth: 0,
     isEarth: true
   };
@@ -44,7 +44,7 @@
     </svg>
     <div>
       <p class="brand-name">机械星球</p>
-      <p class="brand-sub">A mechanical planet</p>
+      <p class="brand-sub">轨道上的机械星球</p>
     </div>
   </div>
 

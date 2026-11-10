@@ -35,7 +35,7 @@
         justFound = true;
         gameState.update((s) => ({ ...s, found }));
         if (found.length >= WONDERS.length)
-          pendingToast = { text: 'Every small wonder found.' };
+          pendingToast = { text: '四处信标都已点亮，星球安静下来了。' };
       },
       onOpenWonder: (wonder) => {
         game?.setOverlayOpen(true);
@@ -52,7 +52,7 @@
       onJournal: (journal) => gameState.update((s) => ({ ...s, journal })),
       onShards: (found, total) => gameState.update((s) => ({ ...s, shards: { found, total } })),
       onMilestone: (m) => {
-        const toast = { kicker: 'Milestone', text: `${m.title} · ${m.blurb}` };
+        const toast = { kicker: '里程碑', text: `${m.title} · ${m.blurb}` };
         if ($gameState.openWonder || m.id === 'wonders') pendingToast = toast;
         else showToast(toast);
       },
@@ -225,19 +225,19 @@
     if (destroyed) return;
     createPlanet(destination.seed, destination.depth, 'push');
     showToast({
-      kicker: flown ? `Arrived · depth ${destination.depth}` : 'Emergency recall',
-      text: flown ? `${destination.name} · ${destination.kind}` : 'Teleported safely back to Earth'
+      kicker: flown ? `抵达 · 深度 ${destination.depth}` : '紧急召回',
+      text: flown ? `${destination.name} · ${destination.kind}` : '已安全传送回机械星球'
     });
   }
 
   function returnToEarth(): void {
     if ($gameState.space.isEarth) return;
-    moveToPlanet({ seed: EARTH_SEED, name: 'Earth', kind: 'Homeworld', depth: 0, fuelCost: 0, color: 0x256a8c }, false);
+    moveToPlanet({ seed: EARTH_SEED, name: '机械星球', kind: '星球', depth: 0, fuelCost: 0, color: 0x256a8c }, false);
   }
 </script>
 
 <svelte:head>
-  <title>{name} · {$gameState.space.planetName}</title>
+  <title>{$gameState.space.isEarth ? name : `${name} · ${$gameState.space.planetName}`}</title>
   <meta
     name="description"
     content="一颗被轨道矿车环绕的机械星球，四个区域，四座信标，一辆能变形的机器人。"
@@ -353,7 +353,7 @@
 
   <noscript>
     <div class="noscript">
-      <p>This page is a small browser game and needs JavaScript.</p>
+      <p>这个页面是一个浏览器小游戏，需要开启 JavaScript 才能运行。</p>
     </div>
   </noscript>
 </div>

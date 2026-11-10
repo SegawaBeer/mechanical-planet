@@ -27,16 +27,16 @@
   const label = (s: string) => NAMES[s] ?? s;
 </script>
 
-<div class="overlay" role="dialog" aria-modal="true" aria-label="Traveller's journal">
-  <button class="backdrop" on:click={() => dispatch('close')} aria-label="Close"></button>
+<div class="overlay" role="dialog" aria-modal="true" aria-label="旅行日志">
+  <button class="backdrop" on:click={() => dispatch('close')} aria-label="关闭"></button>
   <div class="panel">
     <header>
       <p class="kicker">行动日志</p>
       <h2>这颗星球上的记录</h2>
       <p class="lead">
-        当前星球：<code>{seed}</code>。
+        当前星球：<code>{seed === EARTH_SEED ? '机械星球' : seed}</code>。
       </p>
-      <button class="close" on:click={() => dispatch('close')} aria-label="Close">
+      <button class="close" on:click={() => dispatch('close')} aria-label="关闭">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
       </button>
     </header>

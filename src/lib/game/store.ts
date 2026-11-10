@@ -62,8 +62,8 @@ export const initialState: GameState = {
     crafted: false,
     fuel: 0,
     maxFuel: MAX_FUEL,
-    planetName: 'Earth',
-    planetKind: 'Homeworld',
+    planetName: '机械星球',
+    planetKind: '星球',
     depth: 0,
     isEarth: true
   },

@@ -29,8 +29,8 @@
   }
 </script>
 
-<div class="overlay" role="dialog" aria-modal="true" aria-label="How to play">
-  <button class="backdrop" on:click={() => dispatch('close')} aria-label="Close"></button>
+<div class="overlay" role="dialog" aria-modal="true" aria-label="操作指南">
+  <button class="backdrop" on:click={() => dispatch('close')} aria-label="关闭"></button>
   <div class="panel">
     <p class="kicker">玩法</p>
     <h2>机械星球 · 操作指南</h2>
@@ -79,7 +79,7 @@
       <div class="seed">
         <div class="seed-text">
           <p class="kicker">{isEarth ? '起始星球' : `星球种子 · 深度 ${depth}`}</p>
-          <p class="seed-label"><code>{seed}</code></p>
+          <p class="seed-label"><code>{isEarth ? '机械星球' : seed}</code></p>
           <p class="seed-help">
             {#if copyState === 'failed'}
               手动复制这个链接：<span class="seed-url">{link}</span>
