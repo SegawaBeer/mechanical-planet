@@ -8,7 +8,7 @@ import { PLANET_RADIUS, surfaceFrame, tangentBasis } from '../planet';
 import { onRoad } from '../roads';
 import type { ZoneApi, ZoneModule } from './types';
 
-const METAL = [0x2b3741, 0x36434e, 0x46545f];
+const METAL = [0x141d28, 0x1b2632, 0x232f3b];
 const ENERGY = 0x2fe6ff;
 const ENERGY_HOT = 0x9ff5ff;
 
@@ -80,22 +80,32 @@ function beacon(api: ZoneApi): void {
 
 // --------------------------------------------------------------- fountains
 
-/** A springhead on the river bank: a ring of stone with an energy jet. */
+/** A springhead on the river bank: a ring of cut ledges round an energy jet. */
 function fountain(api: ZoneApi, d: THREE.Vector3, phase: number): void {
   const c = api.ctx;
   const f = surfaceFrame(d, 0, new THREE.Matrix4());
   excludeAt(api, d, 3.4);
-  const rocks = 13;
-  for (let i = 0; i < rocks; i++) {
-    const a = (i / rocks) * Math.PI * 2;
-    const r = 2.05 + rnd(c, -0.2, 0.35);
-    part(c.solid, G.dodeca, METAL[i % 3], f, {
+  const ledges = 11;
+  for (let i = 0; i < ledges; i++) {
+    const a = (i / ledges) * Math.PI * 2;
+    const r = 2.0 + rnd(c, -0.1, 0.3);
+    part(c.solid, G.box, METAL[i % 3], f, {
       p: [Math.sin(a) * r, 0, Math.cos(a) * r],
-      s: [rnd(c, 0.9, 1.5), rnd(c, 0.8, 1.9), rnd(c, 0.9, 1.4)],
-      r: [rnd(c, -0.15, 0.15), a, rnd(c, -0.15, 0.15)]
+      s: [rnd(c, 0.9, 1.5), rnd(c, 0.3, 0.75), rnd(c, 0.45, 0.85)],
+      r: [rnd(c, -0.08, 0.08), -a + rnd(c, -0.3, 0.3), rnd(c, -0.12, 0.12)]
     });
   }
   footprint(c, f, 2.2);
+  // Energon glass shards standing in the ring, feeding the jet.
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2 + 0.4;
+    const h = rnd(c, 0.7, 1.5);
+    part(c.glow, G.tetra, ENERGY, f, {
+      p: [Math.sin(a) * 1.5, 0, Math.cos(a) * 1.5],
+      s: [0.24, h, 0.14],
+      r: [0, a, 0]
+    });
+  }
   part(c.glow, G.cyl8, ENERGY, f, { p: [0, 0.12, 0], s: [3.1, 0.08, 3.1] });
   part(c.glow, G.cyl8, ENERGY_HOT, f, { p: [0, 0.17, 0], s: [1.3, 0.07, 1.3] });
   emit(c, f, ENERGY, 2.6, 18, [0, 1.2, 0]);
@@ -155,6 +165,31 @@ function fountain(api: ZoneApi, d: THREE.Vector3, phase: number): void {
   });
 }
 
+// --------------------------------------------------------------- bank ledges
+
+/**
+ * A cut ledge at the waterline: one flat machined block with a thin bright lip
+ * on the water side, so the sheet reads as lying in a cut rather than on sand.
+ */
+function bankLedge(api: ZoneApi, d: THREE.Vector3): void {
+  const c = api.ctx;
+  const f = surfaceFrame(d, 0, new THREE.Matrix4());
+  const w = rnd(c, 1.1, 2.0);
+  part(c.solid, G.box, METAL[Math.floor(c.rng() * 3)], f, {
+    s: [w, rnd(c, 0.35, 0.7), rnd(c, 0.45, 0.8)],
+    r: [rnd(c, -0.06, 0.06), c.rng() * Math.PI, rnd(c, -0.1, 0.1)]
+  });
+  part(c.glow, G.box, ENERGY, f, { p: [0, 0.31, w * 0.28], s: [w * 0.92, 0.045, 0.05] });
+  for (let i = 0; i < 2; i++) {
+    part(c.solid, G.box, METAL[0], f, {
+      p: [rnd(c, -0.5, 0.5) * w, 0, rnd(c, 0.6, 1.3)],
+      s: [rnd(c, 0.2, 0.5), rnd(c, 0.05, 0.14), rnd(c, 0.15, 0.4)],
+      r: [0, c.rng() * 3, 0]
+    });
+  }
+  footprint(c, f, 0.7);
+}
+
 // --------------------------------------------------------------- rock
 
 /** A cluster of glowing crystals pushing up through the ground. */
@@ -175,10 +210,46 @@ function crystals(c: Ctx, f: THREE.Matrix4, scale: number): void {
 
 // --------------------------------------------------------------- scatter
 
-function plateRock(c: Ctx, f: THREE.Matrix4): void {
-  const s = rnd(c, 0.6, 1.3);
-  footprint(c, f, 0.5 * s);
-  part(c.solid, G.dodeca, 0x3f4f5c, f, { s: [s * 1.2, s * 0.7, s], r: [0, c.rng() * 3, 0] });
+/** A fractured plate leaning out of the ground, with debris at its foot. */
+function fracturedSlab(c: Ctx, f: THREE.Matrix4): void {
+  const w = rnd(c, 0.8, 2.2);
+  const h = rnd(c, 0.9, 2.8);
+  const t = rnd(c, 0.18, 0.42);
+  const tone = c.rng() < 0.5 ? 0x1a2632 : 0x22303c;
+  const lean = rnd(c, -0.45, 0.45);
+  const tilt = rnd(c, -0.25, 0.25);
+  part(c.solid, G.box, tone, f, { s: [w, h, t], r: [tilt, c.rng() * 3, lean] });
+  if (c.rng() < 0.55) {
+    part(c.solid, G.box, 0x141d27, f, {
+      p: [rnd(c, -0.5, 0.5), rnd(c, 0.1, 0.8), rnd(c, -0.4, 0.4)],
+      s: [w * rnd(c, 0.35, 0.7), h * rnd(c, 0.25, 0.6), t * 0.8],
+      r: [rnd(c, -0.6, 0.6), c.rng() * 3, rnd(c, -0.6, 0.6)]
+    });
+  }
+  if (c.rng() < 0.3) {
+    part(c.solid, G.box, ENERGY, f, { p: [0, h * 0.95, 0], s: [w * 0.8, 0.05, 0.05], r: [tilt, 0, lean] });
+  }
+  const n = 2 + Math.floor(c.rng() * 3);
+  for (let i = 0; i < n; i++) {
+    const a = c.rng() * Math.PI * 2;
+    const r = rnd(c, 0.4, 1.2);
+    part(c.solid, G.box, 0x1b2632, f, {
+      p: [Math.sin(a) * r, 0, Math.cos(a) * r],
+      s: [rnd(c, 0.15, 0.6), rnd(c, 0.05, 0.15), rnd(c, 0.12, 0.45)],
+      r: [rnd(c, -0.2, 0.2), c.rng() * 3, rnd(c, -0.2, 0.2)]
+    });
+  }
+  footprint(c, f, Math.max(0.6, w * 0.4));
+}
+
+/** A thin blade fin rising out of the ground. */
+function bladeShard(c: Ctx, f: THREE.Matrix4): void {
+  const h = rnd(c, 1.0, 2.8);
+  part(c.solid, G.tetra, 0x22303c, f, {
+    s: [rnd(c, 0.4, 1.0), h, rnd(c, 0.1, 0.22)],
+    r: [rnd(c, -0.1, 0.1), c.rng() * 3, rnd(c, -0.35, 0.35)]
+  });
+  footprint(c, f, 0.4);
 }
 
 function smallCrystals(c: Ctx, f: THREE.Matrix4): void {
@@ -192,7 +263,7 @@ function pipeStub(c: Ctx, f: THREE.Matrix4): void {
   part(c.glow, G.cyl8, c.rng() < 0.5 ? ENERGY : ENERGY_HOT, f, { p: [0, h, 0], s: [0.3, 0.1, 0.3] });
 }
 
-/** A shelf of stacked plates on the canyon rim, for scale. */
+/** A stack of cut plate ledges on the canyon rim, for scale. */
 function rimStack(c: Ctx, f: THREE.Matrix4): void {
   const s = rnd(c, 0.9, 1.6);
   footprint(c, f, 0.8 * s);
@@ -200,12 +271,12 @@ function rimStack(c: Ctx, f: THREE.Matrix4): void {
   const n = 2 + Math.floor(c.rng() * 3);
   for (let i = 0; i < n; i++) {
     const wide = s * (1.5 - i * 0.22);
-    part(c.solid, G.cyl6, METAL[i % 3], f, {
-      p: [rnd(c, -0.1, 0.1), lift, rnd(c, -0.1, 0.1)],
-      s: [wide * 2, s * 0.35, wide * 1.6],
-      r: [rnd(c, -0.05, 0.05), c.rng() * 3, rnd(c, -0.05, 0.05)]
+    part(c.solid, G.box, METAL[i % 3], f, {
+      p: [rnd(c, -0.12, 0.12), lift, rnd(c, -0.12, 0.12)],
+      s: [wide * 1.6, s * 0.32, wide * 1.1],
+      r: [rnd(c, -0.06, 0.06), c.rng() * 0.6, rnd(c, -0.06, 0.06)]
     });
-    lift += s * 0.34;
+    lift += s * 0.3;
   }
 }
 
@@ -249,11 +320,22 @@ export const riverZone: ZoneModule = {
       footprint(api.ctx, f, 0.9);
       crystals(api.ctx, f, scale);
     }
+    // Cut ledges step down both banks of the main channel, each with a bright
+    // lip at the water, so the canyon edge reads as machined stone.
+    for (let i = 0; i < 9; i++) {
+      const u = 0.08 + i * 0.105;
+      for (const sign of [1, -1]) {
+        const d = clearSpot(u + sign * 0.02, 0.55, sign, 3.4);
+        if (!d) continue;
+        bankLedge(api, d);
+      }
+    }
   },
   scatter: [
-    { p: 0.05, build: plateRock },
+    { p: 0.05, build: fracturedSlab },
     { p: 0.022, build: smallCrystals },
-    { p: 0.025, build: pipeStub },
-    { p: 0.012, build: rimStack }
+    { p: 0.022, build: pipeStub },
+    { p: 0.012, build: rimStack },
+    { p: 0.012, build: bladeShard }
   ]
 };

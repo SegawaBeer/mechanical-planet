@@ -30,6 +30,144 @@ export function configurePlanet(profile: PlanetProfile): void {
   terrainReliefScale = relief;
   terrainDetailScale = THREE.MathUtils.lerp(1, ruggedness, 0.65);
   configureBiomeOcean(profile);
+  // The plate mosaic is part of the planet's identity: rebuild it for the seed.
+  plateSeed = hashSeedText(profile.seed);
+  platesReady = false;
+}
+
+// ---------------------------------------------------------------- plate field
+//
+// The landform is not a smooth skin on a sphere. It is a mosaic of fractured
+// metal plates: each plate is one plane (a lift plus a tilt), so its face
+// shades as a single flat facet, and the seam between two plates is a hard
+// crease instead of a rounded roll. A second, finer chip layer breaks the big
+// faces with smaller cut plates the player can read at walking distance.
+
+type Plate = {
+  dir: THREE.Vector3;
+  east: THREE.Vector3;
+  north: THREE.Vector3;
+  /** Height of the plate seed above its zone base, in planet units. */
+  lift: number;
+  /** Height gained per surface unit east / north of the seed. */
+  slopeE: number;
+  slopeN: number;
+  /** Position along the zone palette, 0..1. */
+  tone: number;
+};
+
+const BIG_PLATE_COUNT = 72;
+const CHIP_PLATE_COUNT = 220;
+const plates: Plate[] = [];
+const chips: Plate[] = [];
+let platesReady = false;
+let plateSeed = 0x2f6b1d;
+
+function hashSeedText(text: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+/**
+ * Fill `out` with `count` plate seeds no closer to each other than `minAngle`,
+ * each carrying its own lift, tilt and palette tone. Rejection sampling over
+ * the sphere; the count keeps shrinking towards the end, which is fine.
+ */
+function fillPlates(
+  out: Plate[],
+  count: number,
+  minAngle: number,
+  liftAmp: number,
+  slopeAmp: number,
+  seed: number
+): void {
+  const rng = seededRng(seed);
+  const minDot = Math.cos(minAngle);
+  for (let attempt = 0; attempt < count * 80 && out.length < count; attempt++) {
+    const x = rng() * 2 - 1;
+    const y = rng() * 2 - 1;
+    const z = rng() * 2 - 1;
+    if (x * x + y * y + z * z < 0.04) continue;
+    const dir = new THREE.Vector3(x, y, z).normalize();
+    let close = false;
+    for (const p of out) {
+      if (p.dir.dot(dir) > minDot) {
+        close = true;
+        break;
+      }
+    }
+    if (close) continue;
+    const east = new THREE.Vector3();
+    const north = new THREE.Vector3();
+    tangentBasis(dir, 0, east, north);
+    out.push({
+      dir,
+      east,
+      north,
+      lift: (rng() * 2 - 1) * liftAmp,
+      slopeE: (rng() * 2 - 1) * slopeAmp,
+      slopeN: (rng() * 2 - 1) * slopeAmp,
+      tone: rng()
+    });
+  }
+}
+
+function ensurePlates(): void {
+  if (platesReady) return;
+  platesReady = true;
+  plates.length = 0;
+  chips.length = 0;
+  fillPlates(plates, BIG_PLATE_COUNT, 0.13, 0.44, 0.026, deriveSeed(plateSeed, 17));
+  fillPlates(chips, CHIP_PLATE_COUNT, 0.052, 0.08, 0.005, deriveSeed(plateSeed, 18));
+}
+
+/**
+ * Nearest plate to `d`. Also leaves the gap, in radians, between `d` and the
+ * seam with the next plate in `_seamMargin`; that margin is what the colourer
+ * and the scatter use to find fault lines.
+ */
+let _seamMargin = Math.PI;
+
+function nearestPlate(list: Plate[], d: THREE.Vector3): Plate {
+  ensurePlates();
+  let best = -2;
+  let second = -2;
+  let index = 0;
+  for (let i = 0; i < list.length; i++) {
+    const dot = list[i].dir.dot(d);
+    if (dot > best) {
+      second = best;
+      best = dot;
+      index = i;
+    } else if (dot > second) {
+      second = dot;
+    }
+  }
+  _seamMargin =
+    0.5 *
+    (Math.acos(THREE.MathUtils.clamp(second, -1, 1)) - Math.acos(THREE.MathUtils.clamp(best, -1, 1)));
+  return list[index];
+}
+
+/** Height of the plate plane under `d`, in planet units. */
+function plateHeight(list: Plate[], d: THREE.Vector3): number {
+  const p = nearestPlate(list, d);
+  const e = d.dot(p.east) * PLANET_RADIUS;
+  const n = d.dot(p.north) * PLANET_RADIUS;
+  return p.lift + p.slopeE * e + p.slopeN * n;
+}
+
+/**
+ * Distance from `d` to the nearest big-plate seam, in radians (0 on the seam).
+ * Scatter uses it to gather props along faults instead of spreading them out.
+ */
+export function plateEdgeMargin(d: THREE.Vector3): number {
+  nearestPlate(plates, d);
+  return _seamMargin;
 }
 
 /**
@@ -79,24 +217,31 @@ export function rawSurfaceRadius(d: THREE.Vector3): number {
     const w = 0.5 * (1 - THREE.MathUtils.clamp(margin / ZONE_FADE, 0, 1));
     h = THREE.MathUtils.lerp(h, zoneHeight(blend.secondary, d, f), w);
   }
-  const bank = THREE.MathUtils.smoothstep(f, BANK_LIP, BANK_LIP + BANK_WIDTH);
+  // The bank is not a slide: it climbs in three cut ledges, so the waterline
+  // reads as machined stone rather than a sand beach.
+  const bank = ledgeBank(THREE.MathUtils.clamp((f - BANK_LIP) / BANK_WIDTH, 0, 1));
   return THREE.MathUtils.lerp(SEA_LEVEL - 0.3, PLANET_RADIUS + h, bank);
 }
-
-/** Sand on the banks of the river. */
-const SAND = new THREE.Color(0xe8d3a0);
 
 /** How far, in surface units, the bank climbs from the waterline to open ground. */
 const BANK_WIDTH = 2.4;
 /** The bank reaches the waterline this far outside the sheet, so no water shows through it. */
 const BANK_LIP = 0.4;
 
+/** Quantise the bank climb into flat treads joined by short, hard risers. */
+function ledgeBank(t: number): number {
+  const steps = 3;
+  const q = t * steps;
+  const i = Math.min(steps - 1, Math.floor(q));
+  return (i + THREE.MathUtils.smoothstep(q - i, 0.72, 1)) / steps;
+}
+
 const _base = { swell: 0, roll: 0 };
 
-/** Broad ground swell and fine roll, shared by every zone, in planet units. */
+/** Fractured plate relief shared by every zone, in planet units. */
 function groundBase(d: THREE.Vector3): { swell: number; roll: number } {
-  _base.swell = fbm3(d.x * 1.7 - 7, d.y * 1.7 + 4, d.z * 1.7 + 9, 3) * 0.75 * terrainReliefScale;
-  _base.roll = fbm3(d.x * 6.5 + 3, d.y * 6.5, d.z * 6.5 - 1, 3) * 0.12 * terrainDetailScale;
+  _base.swell = plateHeight(plates, d) * terrainReliefScale;
+  _base.roll = plateHeight(chips, d) * terrainDetailScale;
   return _base;
 }
 
@@ -116,11 +261,12 @@ function zoneHeight(zone: Biome, d: THREE.Vector3, f: number): number {
   const h = 1.15 + base.swell + base.roll;
   const r = Math.acos(THREE.MathUtils.clamp(zone.center.dot(d), -1, 1)) * PLANET_RADIUS;
   if (zone.id === 'river') {
-    // Flat-topped mesas, held low near the water so the canyon floor is walkable.
+    // Cut terraces above the floodplain: each tread is flat and each riser is
+    // short and hard, so the mesas read as plate edges, not hills.
     const n = fbm3(d.x * 2.4 - 12, d.y * 2.4 + 6, d.z * 2.4 - 2, 3);
     const mesa = THREE.MathUtils.smoothstep(n, 0.02, 0.45);
     const plain = THREE.MathUtils.smoothstep(f, 1.5, 10);
-    return h + 0.35 - 0.65 * (1 - plain) + mesa * 1.35 * plain;
+    return h + 0.35 - 0.65 * (1 - plain) + terrace(mesa * plain * 1.35, 0.5);
   }
   if (zone.id === 'citadel') {
     // Four terraces, 0.45 units a step, rising to a level crown at the heart.
@@ -132,12 +278,22 @@ function zoneHeight(zone: Biome, d: THREE.Vector3, f: number): number {
   if (zone.id === 'ark') {
     tangentBasis(zone.center, 0, _tiltEast, _tiltNorth);
     const across = THREE.MathUtils.clamp(d.dot(_tiltEast) * PLANET_RADIUS, -30, 30);
-    return 2.1 + (base.swell + base.roll) * 0.3 + across * 0.022;
+    // The dock stays flatter than open rock so the hull beds down cleanly, but
+    // the chip layer runs at full strength: the plain still breaks into small
+    // cut plates instead of reading as a smooth bowl.
+    return 2.1 + base.swell * 0.45 + base.roll + across * 0.022;
   }
   // fortress
   const plate = 1 - THREE.MathUtils.smoothstep(r, 13, 17);
   const rim = THREE.MathUtils.smoothstep(r, 13, 15.5) * (1 - THREE.MathUtils.smoothstep(r, 15.5, 19));
-  return h + 0.25 + plate * 1.4 + rim * 0.7;
+  return h + 0.25 + terrace(plate * 1.4, 0.5) + rim * 0.7;
+}
+
+/** Quantise a rise into flat treads joined by short, hard risers. */
+function terrace(x: number, step: number): number {
+  const q = x / step;
+  const i = Math.floor(q);
+  return (i + THREE.MathUtils.smoothstep(q - i, 0.6, 1)) * step;
 }
 
 const _na = new THREE.Vector3();
@@ -311,31 +467,62 @@ function smoothSphere(rounds: number): THREE.BufferGeometry {
   return geo;
 }
 
-const _pal = new THREE.Color();
+const _tone = new THREE.Color();
+const _edge = new THREE.Color();
+const _bank = new THREE.Color();
+const _hsl = { h: 0, s: 0, l: 0 };
 
 /**
- * Ground colour at one direction. Everything is a function of position, so
- * neighbouring vertices blend into each other: a low-frequency noise picks a
- * place along the zone's palette and another low-frequency noise lifts or drops
- * the tone. There are no plates, no seams and no per-face noise.
+ * Push a palette colour down to the dark metal base. Hue is kept, so the zones
+ * still separate, but value is held near a tenth and the reflection of the sky,
+ * not the albedo, is what the eye reads as light.
  */
+function obsidian(hex: number, out: THREE.Color): THREE.Color {
+  out.setHex(hex);
+  out.getHSL(_hsl);
+  out.setHSL(_hsl.h, Math.min(0.65, _hsl.s * 0.9 + 0.1), 0.05 + _hsl.l * 0.08);
+  return out;
+}
+
 /** Ground colour of one zone at `d`, before any blend with a neighbour. */
 function zoneGround(b: Biome, d: THREE.Vector3, f: number, out: THREE.Color): THREE.Color {
-  if (f < 0.05) return out.setHex(b.beach);
+  if (f < 0.05) return out.setHex(OCEAN.ground[0]);
   const palette = b.ground;
   const n = palette.length;
-  // The ark's five-colour patchwork needs a tighter noise so separate patches
-  // still show; every other zone uses two or three closely related tones and a
-  // broad patch so the ground reads as one plate.
-  const freq = b.id === 'ark' ? 7 : 2.2;
-  const t = THREE.MathUtils.clamp(fbm3(d.x * freq + 21, d.y * freq - 9, d.z * freq + 3, 2) * 0.5 + 0.5, 0, 1) * (n - 1);
-  const i0 = Math.min(n - 1, Math.floor(t));
+  // The plate decides the tone, so the plain is a mosaic of slightly different
+  // plates instead of one flat albedo.
+  const plate = nearestPlate(plates, d);
+  const margin = _seamMargin * PLANET_RADIUS;
+  const t = THREE.MathUtils.clamp(plate.tone, 0, 0.999) * (n - 1);
+  const i0 = Math.floor(t);
   const i1 = Math.min(n - 1, i0 + 1);
-  out.setHex(palette[i0]).lerp(_pal.setHex(palette[i1]), t - i0);
-  const shade = 1 + THREE.MathUtils.clamp(fbm3(d.x * 3.3 - 4, d.y * 3.3 + 8, d.z * 3.3 - 6, 2), -1, 1) * 0.12;
+  obsidian(palette[i0], out);
+  obsidian(palette[i1], _tone);
+  out.lerp(_tone, t - i0);
+  const shade =
+    (0.72 + plate.tone * 0.5) *
+    (1 + THREE.MathUtils.clamp(fbm3(d.x * 7.3 - 4, d.y * 7.3 + 8, d.z * 7.3 - 6, 2), -1, 1) * 0.07);
   out.multiplyScalar(shade);
-  // Sand at the waterline, fading into the land over a few units.
-  if (f < 4) out.lerp(SAND, (1 - THREE.MathUtils.smoothstep(f, 0.2, 3.8)) * 0.92);
+  // Saturated colour lives on the cut edge: a thin lip of the zone accent runs
+  // along the plate seam.
+  const lip = 1 - THREE.MathUtils.smoothstep(margin, 0.08, 1.5);
+  if (lip > 0) {
+    _edge.setHex(b.accent).getHSL(_hsl);
+    _edge.setHSL(_hsl.h, Math.min(0.95, _hsl.s + 0.25), 0.24);
+    out.lerp(_edge, lip * 0.6);
+  }
+  // The bank is cut metal with one bright lip where the sheet meets the stone.
+  if (f < 4) {
+    _bank.setHex(OCEAN.ground[0]).getHSL(_hsl);
+    _bank.setHSL(_hsl.h, _hsl.s, 0.04);
+    out.lerp(_bank, (1 - THREE.MathUtils.smoothstep(f, 0.5, 3.6)) * 0.8);
+    const shore = 1 - THREE.MathUtils.smoothstep(f, 0.08, 0.9);
+    if (shore > 0) {
+      _edge.setHex(0x7ff0ff).getHSL(_hsl);
+      _edge.setHSL(_hsl.h, Math.min(1, _hsl.s + 0.2), 0.4);
+      out.lerp(_edge, shore * 0.78);
+    }
+  }
   return out;
 }
 
@@ -355,14 +542,14 @@ function groundColor(d: THREE.Vector3, out: THREE.Color): THREE.Color {
   let colour: THREE.Color;
   if (margin < ZONE_FADE) {
     zoneGround(blend.primary, d, f, out);
-    zoneGround(blend.secondary, d, f, _pal);
-    colour = out.lerp(_pal, 0.5 * (1 - THREE.MathUtils.clamp(margin / ZONE_FADE, 0, 1)));
+    zoneGround(blend.secondary, d, f, _tone);
+    colour = out.lerp(_tone, 0.5 * (1 - THREE.MathUtils.clamp(margin / ZONE_FADE, 0, 1)));
   } else {
     colour = zoneGround(blend.primary, d, f, out);
   }
   // The shelf just under the waterline is shaded like the bed, so the sheet
   // reads as lying in the cut rather than on top of the ground.
-  if (f < 1.6) colour.lerp(_pal.setHex(OCEAN.ground[0]), 1 - THREE.MathUtils.smoothstep(f, 0.2, 1.6));
+  if (f < 1.6) colour.lerp(_bank.setHex(OCEAN.ground[0]), 1 - THREE.MathUtils.smoothstep(f, 0.2, 1.6));
   return colour;
 }
 
@@ -386,18 +573,20 @@ export function buildGround(): THREE.Mesh {
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geo.computeVertexNormals();
 
-  // Machined metal, not painted ground. High metalness with a low roughness
-  // turns the flat plains into the mirror-wet sheet the reference asks for:
+  // Machined metal, not painted ground. High metalness with low roughness
+  // turns the flat planes into the mirror-wet sheet the reference asks for:
   // what the player sees is mostly the sky environment, tinted by the zone's
-  // own vertex colours. The circuit etch is the faint seam pattern on top.
+  // own vertex colours. Flat shading keeps every plate one facet and every
+  // seam a cut edge instead of smoothing the mosaic back into a hill.
   const mat = withCircuitEtch(
     new THREE.MeshStandardMaterial({
       vertexColors: true,
-      roughness: 0.42,
-      metalness: 0.82,
-      envMapIntensity: 1.05
+      flatShading: true,
+      roughness: 0.34,
+      metalness: 0.88,
+      envMapIntensity: 0.95
     }),
-    { strength: 0.055, scale: 0.9, color: 0x63d8f0 }
+    { strength: 0.045, scale: 0.85, color: 0x63d8f0 }
   );
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;

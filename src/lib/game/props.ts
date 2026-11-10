@@ -3,13 +3,13 @@
 // and bakes everything into the three merged meshes described in `kit.ts`.
 
 import * as THREE from 'three';
-import { biomeById, landBiomeAt, landBiomeBlend, oceanField } from './biomes';
+import { biomeById, landBiomeAt, landBiomeBlend, oceanField, type Biome } from './biomes';
 import { deriveSeed, fbm3, seededRng } from './noise';
-import { PLANET_RADIUS, offsetDir, surfaceFrame } from './planet';
+import { PLANET_RADIUS, offsetDir, plateEdgeMargin, surfaceFrame } from './planet';
 import { onRoad, roadBlocks, roadDistance, roadPieces } from './roads';
 import type { Collider } from './collision';
 import type { Emitter } from './lights';
-import { PropBatch, type Ctx } from './kit';
+import { PropBatch, G, part, footprint, rnd, type Ctx } from './kit';
 import { autoCollide, type KeepFree } from './autoCollide';
 import { WONDERS, wonderDir } from './wonders';
 import type { ZoneApi, ZoneId, ZoneModule } from './zones/types';
@@ -32,24 +32,189 @@ const ZONES: Record<ZoneId, ZoneModule> = {
  */
 const SCATTER_SAMPLES = 6000;
 
+/**
+ * Extra directions sampled for the fault-seam pass that places the big
+ * silhouettes. Only a small band around each plate boundary survives.
+ */
+const FAULT_SAMPLES = 7000;
+
 /** Clumping noise, so what survives gathers into small groups, not even rows. */
 function clumpAt(d: THREE.Vector3): number {
   const n = fbm3(d.x * 5.5 + 31, d.y * 5.5 - 13, d.z * 5.5 + 7, 2);
   return Math.max(0.55, Math.min(1.25, 0.9 + n * 0.6));
 }
 
+/** Width, in surface units, of the band of scatter that hugs a plate seam. */
+const FAULT_WIDTH = 2.6;
+
+/** 1 on a plate seam, falling to 0 about `FAULT_WIDTH` units away from it. */
+function faultWeight(d: THREE.Vector3): number {
+  const margin = plateEdgeMargin(d) * PLANET_RADIUS;
+  return 1 - THREE.MathUtils.smoothstep(margin, 0.12, FAULT_WIDTH);
+}
+
 /**
  * Chance that a scattered prop stands at `d`. Detail belongs to the landmark
- * ring around a zone heart and to the shoulder of the carriageway; the open
- * plain between them stays almost empty, so the ground plate, not a carpet of
- * small blocks, is what the eye reads.
+ * ring around a zone heart, to the shoulder of the carriageway and to the
+ * seams between plates; the open faces between faults stay clear, so the
+ * plate, not a carpet of small blocks, is what the eye reads.
  */
 function scatterWeight(d: THREE.Vector3): number {
   const blend = landBiomeBlend(d);
   const fromHeart = d.angleTo(blend.primary.center) * PLANET_RADIUS;
   const nearLandmark = 1 - THREE.MathUtils.smoothstep(fromHeart, 9, 23);
   const nearRoad = 1 - THREE.MathUtils.smoothstep(roadDistance(d), 2.4, 7);
-  return Math.max(0.07, Math.max(nearLandmark * 0.55, nearRoad * 0.4));
+  const nearFault = faultWeight(d);
+  return Math.max(0.06, Math.max(nearLandmark * 0.5, nearRoad * 0.36, nearFault * 0.6));
+}
+
+// ------------------------------------------------------------- slab scenery
+//
+// The surface prop language is broken machined plate: leaning slabs etched
+// with circuitry, thin blade fins rising out of the faults, and flat debris
+// piled at the slab feet. No rounded boulders and no dune forms.
+
+const _hsl = { h: 0, s: 0, l: 0 };
+const _depth = new THREE.Color();
+
+/** A palette colour pulled down to dark machined metal, hue kept. */
+function deepHex(hex: number, value = 0.07): number {
+  _depth.setHex(hex);
+  _depth.getHSL(_hsl);
+  _depth.setHSL(_hsl.h, Math.min(0.62, _hsl.s * 0.85 + 0.1), value + _hsl.l * 0.04);
+  return _depth.getHex();
+}
+
+/** A big fractured slab, leaning, with broken plates piled at its foot. */
+function slabPlate(c: Ctx, f: THREE.Matrix4, biome: Biome): void {
+  const w = rnd(c, 1.0, 3.0);
+  const h = rnd(c, 1.3, 4.0);
+  const t = rnd(c, 0.2, 0.48);
+  const toneA = deepHex(biome.ground[0]);
+  const toneB = deepHex(biome.ground[1] ?? biome.ground[0]);
+  const lean = rnd(c, -0.4, 0.4);
+  const tilt = rnd(c, -0.3, 0.3);
+  part(c.solid, G.box, toneA, f, { s: [w, h, t], r: [tilt, c.rng() * 3, lean] });
+  // A second plate broken away from the first and left leaning against it.
+  if (c.rng() < 0.65) {
+    part(c.solid, G.box, toneB, f, {
+      p: [rnd(c, -0.7, 0.7), rnd(c, 0.15, 1.1), rnd(c, -0.5, 0.5)],
+      s: [w * rnd(c, 0.35, 0.75), h * rnd(c, 0.25, 0.7), t * rnd(c, 0.6, 1)],
+      r: [rnd(c, -0.7, 0.7), c.rng() * 3, rnd(c, -0.7, 0.7)]
+    });
+  }
+  // A thin strip of the zone accent along the cut top edge: the saturated
+  // colour of the zone lives on the edges, not on the faces.
+  if (c.rng() < 0.32) {
+    part(c.solid, G.box, biome.accent, f, {
+      p: [0, h * 0.96, 0],
+      s: [w * 0.86, 0.055, 0.055],
+      r: [tilt, 0, lean]
+    });
+  }
+  // Broken plate debris around the base.
+  const n = 2 + Math.floor(c.rng() * 3);
+  for (let i = 0; i < n; i++) {
+    const a = c.rng() * Math.PI * 2;
+    const r = rnd(c, 0.6, 1.4);
+    part(c.solid, G.box, toneB, f, {
+      p: [Math.sin(a) * r, 0, Math.cos(a) * r],
+      s: [rnd(c, 0.2, 0.8), rnd(c, 0.06, 0.18), rnd(c, 0.15, 0.6)],
+      r: [rnd(c, -0.2, 0.2), c.rng() * 3, rnd(c, -0.2, 0.2)]
+    });
+  }
+  footprint(c, f, Math.max(0.85, w * 0.42));
+}
+
+/** A thin, sharp fin of plate rising out of a fault. */
+function bladeFin(c: Ctx, f: THREE.Matrix4, biome: Biome): void {
+  const h = rnd(c, 1.6, 4.4);
+  const w = rnd(c, 0.5, 1.4);
+  const t = rnd(c, 0.12, 0.26);
+  part(c.solid, G.tetra, deepHex(biome.ground[2] ?? biome.ground[0]), f, {
+    p: [rnd(c, -0.15, 0.15), 0, rnd(c, -0.15, 0.15)],
+    s: [w, h, t],
+    r: [rnd(c, -0.12, 0.12), c.rng() * Math.PI, rnd(c, -0.3, 0.3)]
+  });
+  if (c.rng() < 0.4) {
+    part(c.solid, G.tetra, biome.accent, f, {
+      p: [0, h * 0.92, 0],
+      s: [w * 0.25, h * 0.18, t * 0.4],
+      r: [0, c.rng() * 3, 0]
+    });
+  }
+  footprint(c, f, Math.max(0.4, w * 0.45));
+}
+
+/** A flat scatter of broken plate on the ground. */
+function plateDebris(c: Ctx, f: THREE.Matrix4, biome: Biome): void {
+  const tone = deepHex(biome.ground[1] ?? biome.ground[0]);
+  const n = 2 + Math.floor(c.rng() * 4);
+  for (let i = 0; i < n; i++) {
+    const a = c.rng() * Math.PI * 2;
+    const r = rnd(c, 0.2, 1.3);
+    part(c.solid, G.box, tone, f, {
+      p: [Math.sin(a) * r, 0, Math.cos(a) * r],
+      s: [rnd(c, 0.18, 0.75), rnd(c, 0.05, 0.16), rnd(c, 0.12, 0.55)],
+      r: [rnd(c, -0.2, 0.2), c.rng() * 3, rnd(c, -0.2, 0.2)]
+    });
+  }
+  footprint(c, f, 0.55);
+}
+
+/**
+ * Circuit etch for scenery, drawn on every face. The foundation etch in
+ * look.ts only lights upward faces, which leaves a standing slab blank; here
+ * the grid runs up the sides too. The hook is a property getter/setter so the
+ * weather/rim pass that replaces `onBeforeCompile` later still composes: its
+ * patch lands in `base` and this etch always runs after it.
+ */
+function withPropEtch(material: THREE.MeshStandardMaterial): THREE.MeshStandardMaterial {
+  const tint = new THREE.Color(0x5fd8ee);
+  let base: ((shader: THREE.WebGLProgramParametersWithUniforms) => void) | null = null;
+  const etch = (shader: THREE.WebGLProgramParametersWithUniforms): void => {
+    shader.uniforms.uPropEtchColor = { value: tint };
+    shader.uniforms.uPropEtchStrength = { value: 0.05 };
+    shader.uniforms.uPropEtchScale = { value: 0.62 };
+    shader.vertexShader =
+      'varying vec3 vPropEtchPos;\n' +
+      shader.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n  vPropEtchPos = position;');
+    shader.fragmentShader =
+      `uniform vec3 uPropEtchColor;
+uniform float uPropEtchStrength;
+uniform float uPropEtchScale;
+varying vec3 vPropEtchPos;
+` +
+      shader.fragmentShader.replace(
+        '#include <emissivemap_fragment>',
+        `#include <emissivemap_fragment>
+  {
+    vec3 ep = vPropEtchPos;
+    float sc = uPropEtchScale;
+    vec3 cell = floor(ep * sc);
+    vec3 f = abs(fract(ep * sc) - 0.5);
+    float axisPick = fract(sin(dot(cell, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+    float line = axisPick < 0.5 ? max(step(f.x, 0.02), step(f.z, 0.02))
+                                : max(step(f.y, 0.02), step(f.x, 0.02));
+    float lit = step(0.45, fract(sin(dot(cell, vec3(39.346, 11.135, 83.155))) * 43758.5453));
+    totalEmissiveRadiance += uPropEtchColor * (line * lit * uPropEtchStrength);
+  }`
+      );
+  };
+  Object.defineProperty(material, 'onBeforeCompile', {
+    configurable: true,
+    get() {
+      return (shader: THREE.WebGLProgramParametersWithUniforms) => {
+        base?.(shader);
+        etch(shader);
+      };
+    },
+    set(fn: (shader: THREE.WebGLProgramParametersWithUniforms) => void) {
+      base = fn;
+    }
+  });
+  material.needsUpdate = true;
+  return material;
 }
 
 export type Dynamic = { object: THREE.Object3D; update: (dt: number, t: number) => void };
@@ -111,6 +276,8 @@ export function buildWorldProps(seed: number): WorldProps {
 
   const d = new THREE.Vector3();
   const f = new THREE.Matrix4();
+  const excluded = (dir: THREE.Vector3): boolean =>
+    exclusions.some((ex) => dir.angleTo(ex.dir) * PLANET_RADIUS < ex.radius);
   for (let i = 0; i < SCATTER_SAMPLES; i++) {
     d.set(ctx.rng() * 2 - 1, ctx.rng() * 2 - 1, ctx.rng() * 2 - 1);
     if (d.lengthSq() < 0.05) continue;
@@ -121,7 +288,7 @@ export function buildWorldProps(seed: number): WorldProps {
     // Keep the carriageway, its margins and the ground under a bridge clear.
     if (onRoad(d, 1.6)) continue;
     if (ctx.rng() > scatterWeight(d) * clumpAt(d)) continue;
-    if (exclusions.some((ex) => d.angleTo(ex.dir) * PLANET_RADIUS < ex.radius)) continue;
+    if (excluded(d)) continue;
     const table = ZONES[landBiomeAt(d).id as ZoneId].scatter;
     let r = ctx.rng();
     surfaceFrame(d, ctx.rng() * Math.PI * 2, f);
@@ -134,6 +301,28 @@ export function buildWorldProps(seed: number): WorldProps {
     }
   }
 
+  // Fault seams get their own pass. Slabs, blades and plate debris gather in
+  // the crease between two plates, which is what gives the horizon its broken
+  // silhouette; the open plate faces stay clear.
+  for (let i = 0; i < FAULT_SAMPLES; i++) {
+    d.set(ctx.rng() * 2 - 1, ctx.rng() * 2 - 1, ctx.rng() * 2 - 1);
+    if (d.lengthSq() < 0.05) continue;
+    d.normalize();
+    if (oceanField(d) < 1.6) continue;
+    // Wider than the paving alone: a three-metre slab at the road edge would
+    // overhang the carriageway even if its centre were clear of it.
+    if (onRoad(d, 3.2)) continue;
+    const fault = faultWeight(d);
+    if (fault < 0.02 || ctx.rng() > fault * 0.5) continue;
+    if (excluded(d)) continue;
+    const biome = landBiomeAt(d);
+    surfaceFrame(d, ctx.rng() * Math.PI * 2, f);
+    const pickR = ctx.rng();
+    if (pickR < 0.52) slabPlate(ctx, f, biome);
+    else if (pickR < 0.8) bladeFin(ctx, f, biome);
+    else plateDebris(ctx, f, biome);
+  }
+
   // The carriageway, its edge lights and its bridge decks ride in the same
   // merged meshes as the scenery, so the whole network costs a few draw calls.
   const identity = new THREE.Matrix4();
@@ -141,7 +330,18 @@ export function buildWorldProps(seed: number): WorldProps {
     (piece.glow ? ctx.glow : ctx.solid).add(piece.geometry, piece.color, identity);
   }
 
-  const solid = ctx.solid.build(new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.55, metalness: 0.15 }));
+  // All scenery shares one lit batch, so the slab etch comes for free.
+  const solid = ctx.solid.build(
+    withPropEtch(
+      new THREE.MeshStandardMaterial({
+        vertexColors: true,
+        flatShading: true,
+        roughness: 0.42,
+        metalness: 0.82,
+        envMapIntensity: 1.0
+      })
+    )
+  );
   const glow = ctx.glow.build(new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false }));
   const night = ctx.night.build(new THREE.MeshBasicMaterial({ vertexColors: true }));
 
