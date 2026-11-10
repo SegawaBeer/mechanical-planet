@@ -1471,7 +1471,7 @@ export class Game {
   private updateWorld(dt: number): void {
     const t = this.time;
     this.applyAtmosphere(dt);
-    this.crowd.update(dt, t, this.globe || this.flying ? null : this.dir);
+    this.crowd.update(dt, t, this.globe || this.flying ? null : this.dir, this.dir);
     this.planets.update(dt, t);
 
     // Swell on the energy channels.

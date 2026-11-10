@@ -74,6 +74,25 @@ export async function loadForms(
   return { robot, vehicle };
 }
 
+/**
+ * A fresh instance of a loaded form, sharing geometry and materials with the
+ * original but owning its own animation clock. Use this when several machines
+ * of one zone need the same file: one `loadForm` fills the cache, and each
+ * machine clones it instead of fetching and dressing the GLB again.
+ */
+export function cloneForm(src: THREE.Object3D): THREE.Object3D {
+  // `Object3D.clone` deep-copies userData as JSON, which drops both the anim
+  // hook and the factory that rebuilds it, so read them off the source first.
+  const makeAnim = src.userData.makeAnim as ((target: THREE.Object3D) => Anim) | undefined;
+  const copy = src.clone(true);
+  const inner = copy.children[0];
+  if (makeAnim && inner) {
+    copy.userData.makeAnim = makeAnim;
+    copy.userData.anim = makeAnim(inner);
+  }
+  return copy;
+}
+
 export type EquipResult = { robot: boolean; vehicle: boolean };
 
 /**
@@ -138,8 +157,11 @@ function dress(scene: THREE.Object3D, entry: ModelEntry, form: ModelForm): THREE
 
   const root = new THREE.Group();
   root.add(inner);
-  root.userData.anim =
-    form === 'robot' ? robotAnim(inner, entry, seatY) : vehicleAnim(inner, entry, seatY);
+  // The animation closes over `inner`, so a clone needs a fresh hook built
+  // against its own inner group; `makeAnim` lets `cloneForm` do that.
+  root.userData.makeAnim = (target: THREE.Object3D) =>
+    form === 'robot' ? robotAnim(target, entry, seatY) : vehicleAnim(target, entry, seatY);
+  root.userData.anim = (root.userData.makeAnim as (t: THREE.Object3D) => Anim)(inner);
 
   root.traverse((o) => {
     const mesh = o as THREE.Mesh;
