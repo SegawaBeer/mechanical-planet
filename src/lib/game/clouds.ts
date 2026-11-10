@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { deriveSeed, seededRng } from './noise';
-import { PLANET_RADIUS } from './planet';
+import { PLANET_RADIUS, tangentBasis } from './planet';
 import type { PlanetProfile } from './space';
 import { landBiomeBlend } from './biomes';
 import { GLOBE_ATMOSPHERE, SKY_GRADIENT, type SkyGradient } from './night';
@@ -163,6 +163,11 @@ function buildSatellite(variant: number): THREE.BufferGeometry {
  * radial up, so the horizon really is the horizon wherever the player stands.
  * Near the globe camera distance the dome fades out into space and the orbit
  * background takes over.
+ *
+ * Vertical aurora curtains ride on the same object: they are built from the
+ * zone's own gradient, so the river, ark and fortress skies carry them while
+ * the citadel's clear daylight keeps only a trace. They fade out with the dome
+ * in globe view.
  */
 class SkyDome {
   readonly mesh: THREE.Mesh;
@@ -171,10 +176,17 @@ class SkyDome {
     zenith: new THREE.Color(),
     horizon: new THREE.Color(),
     haze: new THREE.Color(),
+    aurora: 0,
     space: 0
   };
   private up = new THREE.Vector3(0, 1, 0);
+  private right = new THREE.Vector3(1, 0, 0);
+  private fwd = new THREE.Vector3(0, 0, 1);
   private ready = false;
+  private curtains: THREE.Mesh;
+  private curtainMat: THREE.ShaderMaterial;
+  private curtainTime = 0;
+  private curtainStrength = 0;
 
   constructor() {
     this.mat = new THREE.ShaderMaterial({
@@ -205,12 +217,15 @@ class SkyDome {
         void main() {
           vec3 dir = normalize(vDir);
           float h = dot(dir, normalize(uUp));
-          // Dark overhead, pale at the horizon.
-          float t = smoothstep(-0.04, 0.62, h);
-          vec3 col = mix(uHorizon, uZenith, pow(t, 0.8));
+          // Dark overhead, pale at the horizon. On a radius-42 planet the land
+          // curves away 30 degrees below the tangent, so the whole sky a ground
+          // camera can see lies in the lower part of this sphere: the ramp is
+          // mapped to that band, not to the full hemisphere.
+          float t = smoothstep(-0.5, 0.12, h);
+          vec3 col = mix(uHorizon, uZenith, pow(t, 0.9));
           // A band of haze lying on the horizon line.
-          float band = pow(1.0 - clamp(abs(h) * 2.2, 0.0, 1.0), 5.0);
-          col = mix(col, uHaze, band * 0.4);
+          float band = pow(1.0 - clamp(abs(h + 0.42) * 3.0, 0.0, 1.0), 4.0);
+          col = mix(col, uHaze, band * 0.45);
           col = mix(col, uSpace, uSpaceMix);
           // One part in 255 of noise: 8-bit gradients band without it.
           float n = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
@@ -230,6 +245,13 @@ class SkyDome {
     this.mesh.frustumCulled = false;
     this.mesh.onBeforeRender = (_r, _s, camera) => this.follow(camera);
     this.mesh.matrixAutoUpdate = false;
+
+    const curtain = curtainSky();
+    this.curtainMat = curtain.material;
+    this.curtains = curtain.mesh;
+    // A child of the dome, so it follows the camera for free. It draws after
+    // the dome but before the sun, and never writes depth.
+    this.mesh.add(this.curtains);
   }
 
   /** Follow the camera and pick the sky of the zone the eye is standing in. */
@@ -245,6 +267,10 @@ class SkyDome {
     if (this.up.lengthSq() < 1e-6) this.up.set(0, 1, 0);
     else this.up.normalize();
     (this.mat.uniforms.uUp.value as THREE.Vector3).copy(this.up);
+    tangentBasis(this.up, 0, this.right, this.fwd);
+    (this.curtainMat.uniforms.uUp.value as THREE.Vector3).copy(this.up);
+    (this.curtainMat.uniforms.uRight.value as THREE.Vector3).copy(this.right);
+    (this.curtainMat.uniforms.uFwd.value as THREE.Vector3).copy(this.fwd);
 
     const dist = cam.position.length();
     this.target.space = THREE.MathUtils.smoothstep(dist, 78, 118);
@@ -256,6 +282,7 @@ class SkyDome {
     this.target.zenith.copy(a.zenith).lerp(b.zenith, w);
     this.target.horizon.copy(a.horizon).lerp(b.horizon, w);
     this.target.haze.copy(a.haze).lerp(b.haze, w);
+    this.target.aurora = THREE.MathUtils.lerp(a.aurora, b.aurora, w);
 
     if (!this.ready) {
       this.ready = true;
@@ -266,6 +293,7 @@ class SkyDome {
   /** Move the uniforms toward the zone the camera has arrived in. */
   update(dt: number): void {
     if (!this.ready) return;
+    this.curtainTime += dt;
     this.apply(1 - Math.exp(-dt * 2.6));
   }
 
@@ -275,7 +303,147 @@ class SkyDome {
     (u.uHorizon.value as THREE.Color).lerp(this.target.horizon, k);
     (u.uHaze.value as THREE.Color).lerp(this.target.haze, k);
     u.uSpaceMix.value += (this.target.space - (u.uSpaceMix.value as number)) * k;
+
+    // Curtains fade with the dome's own trip into space, and with the zone's
+    // own aurora strength.
+    this.curtainStrength += (this.target.aurora - this.curtainStrength) * k;
+    const strength = this.curtainStrength * (1 - (u.uSpaceMix.value as number));
+    this.curtainMat.uniforms.uStrength.value = strength;
+    this.curtainMat.uniforms.uTime.value = this.curtainTime;
+    this.curtains.visible = strength > 0.01;
   }
+}
+
+/** Vertices along and up a curtain band. */
+const CURTAIN_SEGMENTS = 72;
+/** Curtain bands, each at its own bearing and height. */
+const CURTAIN_BANDS = 5;
+/** Rows up a curtain: enough for the crown to bend without a visible crease. */
+const CURTAIN_ROWS = 4;
+/** Radius the curtains hang at, inside the dome and well inside the stars. */
+const CURTAIN_RADIUS = 600;
+
+const CURTAIN_VERT = /* glsl */ `
+uniform vec3 uUp;
+uniform vec3 uRight;
+uniform vec3 uFwd;
+uniform float uTime;
+attribute float aSide;
+attribute float aHeight;
+attribute float aBand;
+varying float vSide;
+varying float vHeight;
+varying float vBand;
+
+void main() {
+  float band = aBand;
+  // The visible sky starts below the tangent plane, because the planet's own
+  // curve puts the horizon 30 degrees down. Curtains hang in that band.
+  float baseElev = -0.24 + mod(band, 3.0) * 0.03;
+  float topElev = 0.26 + mod(band, 2.0) * 0.08;
+  float elev = mix(baseElev, topElev, aHeight);
+  // Five bands around the sky, each sweeping 70 degrees, so a ground view
+  // always catches at least one of them.
+  float az = band * 1.2566 + (aSide - 0.5) * 1.22 + uTime * (0.004 + band * 0.0012);
+  // A slow sway, stronger at the crown, so the curtain ripples like cloth.
+  float sway = sin(aSide * 9.42 + uTime * 0.11 + band * 2.3) * 0.045 * (0.35 + aHeight);
+  vec3 dir = normalize(uUp * sin(elev + sway) + (uRight * cos(az) + uFwd * sin(az)) * cos(elev + sway));
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(dir * ${CURTAIN_RADIUS.toFixed(1)}, 1.0);
+  vSide = aSide;
+  vHeight = aHeight;
+  vBand = aBand;
+}
+`;
+
+const CURTAIN_FRAG = /* glsl */ `
+uniform float uTime;
+uniform float uStrength;
+varying float vSide;
+varying float vHeight;
+varying float vBand;
+
+vec3 hsv2rgb(vec3 c) {
+  vec3 p = abs(fract(c.xxx + vec3(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);
+  return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y);
+}
+
+void main() {
+  // Soft ends: the foot lifts off the horizon and the crown dissolves.
+  float foot = smoothstep(0.0, 0.35, vHeight);
+  float crown = 1.0 - smoothstep(0.72, 1.0, vHeight);
+  float side = smoothstep(0.0, 0.24, vSide) * (1.0 - smoothstep(0.76, 1.0, vSide));
+  // Thin vertical striations make the band read as a curtain, not a sheet.
+  float stripes = 0.55 + 0.45 * sin(vSide * 46.0 + uTime * 0.7 + vBand * 2.1);
+  float a = foot * crown * side * stripes * uStrength * 1.8;
+  // Green-cyan at the foot, violet at the crown, with each band offset a little.
+  float hue = mix(0.4, 0.8, vHeight) + vBand * 0.03;
+  vec3 col = hsv2rgb(vec3(fract(hue), 0.65, 0.95));
+  gl_FragColor = vec4(col, clamp(a, 0.0, 1.0));
+}
+`;
+
+/** One geometry and one draw call for every curtain band in the sky. */
+function curtainSky(): { mesh: THREE.Mesh; material: THREE.ShaderMaterial } {
+  const verts = (CURTAIN_SEGMENTS + 1) * CURTAIN_ROWS;
+  const count = verts * CURTAIN_BANDS;
+  const position = new Float32Array(count * 3);
+  const side = new Float32Array(count);
+  const height = new Float32Array(count);
+  const band = new Float32Array(count);
+  const index: number[] = [];
+  let v = 0;
+  for (let b = 0; b < CURTAIN_BANDS; b++) {
+    const start = v;
+    for (let row = 0; row < CURTAIN_ROWS; row++) {
+      for (let i = 0; i <= CURTAIN_SEGMENTS; i++) {
+        // Position is unused by the shader; the attributes carry the shape.
+        side[v] = i / CURTAIN_SEGMENTS;
+        height[v] = row / (CURTAIN_ROWS - 1);
+        band[v] = b;
+        v++;
+      }
+    }
+    for (let row = 0; row < CURTAIN_ROWS - 1; row++) {
+      for (let i = 0; i < CURTAIN_SEGMENTS; i++) {
+        const a = start + row * (CURTAIN_SEGMENTS + 1) + i;
+        const c = a + CURTAIN_SEGMENTS + 1;
+        index.push(a, c, a + 1, a + 1, c, c + 1);
+      }
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(position, 3));
+  geo.setAttribute('aSide', new THREE.BufferAttribute(side, 1));
+  geo.setAttribute('aHeight', new THREE.BufferAttribute(height, 1));
+  geo.setAttribute('aBand', new THREE.BufferAttribute(band, 1));
+  geo.setIndex(index);
+
+  const material = new THREE.ShaderMaterial({
+    uniforms: {
+      uUp: { value: new THREE.Vector3(0, 1, 0) },
+      uRight: { value: new THREE.Vector3(1, 0, 0) },
+      uFwd: { value: new THREE.Vector3(0, 0, 1) },
+      uTime: { value: 0 },
+      uStrength: { value: 0 }
+    },
+    vertexShader: CURTAIN_VERT,
+    fragmentShader: CURTAIN_FRAG,
+    transparent: true,
+    depthWrite: false,
+    // Terrain in front occludes the curtains: they hang far out, but a hill
+    // rising into the lower sky must not get a band of aurora painted on it.
+    depthTest: true,
+    side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
+    toneMapped: false
+  });
+
+  const mesh = new THREE.Mesh(geo, material);
+  mesh.name = 'sky-curtains';
+  mesh.renderOrder = -9500;
+  mesh.frustumCulled = false;
+  mesh.matrixAutoUpdate = true;
+  return { mesh, material };
 }
 
 /**

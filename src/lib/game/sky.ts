@@ -166,8 +166,144 @@ export class Moon {
   }
 }
 
-// ---------------------------------------------------------------- destination planets
+// ---------------------------------------------------------------- sun
 
+/** Radius the sun hangs at: outside the constellations, inside the far plane. */
+const SUN_RADIUS = 440;
+/** Half-width of the sun's quad. The disc fills `DISC` of it. */
+const SUN_SIZE = 100;
+/** Elevation of the sun above the local horizon, in radians: low and oversized. */
+const SUN_ELEVATION = 0.05;
+
+const SUN_FRAG = `
+uniform vec3 uCore;
+uniform vec3 uHalo;
+uniform float uTime;
+uniform float uOpacity;
+varying vec2 vUv;
+
+const float DISC = 0.46;
+
+vec3 hsv2rgb(vec3 c) {
+  vec3 p = abs(fract(c.xxx + vec3(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);
+  return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y);
+}
+
+void main() {
+  vec2 p = (vUv - 0.5) * 2.0;
+  float d = length(p);
+
+  // A wide soft bloom that reaches well past the disc and lifts the sky around it.
+  float bloom = pow(max(0.0, 1.0 - d), 4.0);
+  vec3 col = uHalo * bloom * 0.26;
+
+  // The disc is pale and slightly brighter toward the rim, so it reads as a
+  // glowing body rather than a cut-out circle.
+  float disc = smoothstep(DISC, DISC - 0.012, d);
+  vec3 face = uCore * (1.0 + 0.22 * pow(d / DISC, 2.0));
+  col = mix(col, face, disc);
+
+  // A rainbow ring standing just outside the disc: hue runs once around it and
+  // drifts slowly, the way a halo sits around a real low sun.
+  float ring = smoothstep(DISC, DISC + 0.05, d) * smoothstep(0.8, 0.5, d);
+  float ang = atan(p.y, p.x);
+  vec3 rainbow = hsv2rgb(vec3(fract(ang / 6.283185 + uTime * 0.015), 0.6, 1.0));
+  col += rainbow * ring * 0.55;
+
+  float a = max(disc, max(bloom * 0.32, ring * 0.6));
+  gl_FragColor = vec4(col, a * uOpacity);
+  #include <colorspace_fragment>
+}
+`;
+
+const SUN_VERT = `
+varying vec2 vUv;
+void main() {
+  vUv = uv;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+const _sunUp = new THREE.Vector3();
+const _sunRight = new THREE.Vector3();
+const _sunFwd = new THREE.Vector3();
+
+/**
+ * The oversized pale sun of the reference sky: a camera-facing disc with a
+ * rainbow halo, hung low over the horizon at a seeded bearing. It is scenery,
+ * not the key light, so it stays where it is while the key light rides over
+ * the camera's shoulder. It follows the planet's radial up, so looking up from
+ * any zone puts it a hand's width above the horizon.
+ */
+export class Sun {
+  readonly group = new THREE.Group();
+  private mesh: THREE.Mesh;
+  private mat: THREE.ShaderMaterial;
+  private bearing: number;
+  private time = 0;
+  private opacity = 0;
+
+  constructor(seed: number) {
+    const rng = seededRng(deriveSeed(seed, 13));
+    this.bearing = rng() * Math.PI * 2;
+    this.mat = new THREE.ShaderMaterial({
+      uniforms: {
+        uCore: { value: new THREE.Color(0xf4efe2) },
+        uHalo: { value: new THREE.Color(0xffe9d4) },
+        uTime: { value: 0 },
+        uOpacity: { value: 0 }
+      },
+      vertexShader: SUN_VERT,
+      fragmentShader: SUN_FRAG,
+      transparent: true,
+      depthWrite: false,
+      // Hills in front must hide the sun; only the dome itself skips depth.
+      depthTest: true,
+      toneMapped: false
+    });
+    this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(SUN_SIZE * 2, SUN_SIZE * 2), this.mat);
+    this.mesh.frustumCulled = false;
+    // Drawn after the additive sky bands (renderOrder -1) and the stars: those
+    // blend over whatever is behind them, and a band edge would otherwise cut
+    // a bright chord straight through the disc. Terrain still occludes the sun
+    // through the depth test.
+    this.mesh.renderOrder = 2;
+    this.group.add(this.mesh);
+    this.group.visible = false;
+  }
+
+  /**
+   * Place the sun against the camera's local horizon and face it at the eye.
+   * Fades out as the camera pulls back into globe view, where the sky dome
+   * has already faded to space.
+   */
+  update(dt: number, camera: THREE.Camera): void {
+    this.time += dt;
+    _sunUp.copy(camera.position);
+    if (_sunUp.lengthSq() < 1e-6) _sunUp.set(0, 1, 0);
+    else _sunUp.normalize();
+    const dist = camera.position.length();
+    const target = 1 - THREE.MathUtils.smoothstep(dist, 74, 108);
+    this.opacity += (target - this.opacity) * Math.min(1, dt * 4);
+    const visible = this.opacity > 0.01;
+    this.group.visible = visible;
+    if (!visible) return;
+
+    tangentBasis(_sunUp, this.bearing, _sunRight, _sunFwd);
+    // Low over the horizon: almost all of the direction lies along the ground
+    // tangent, with a small upward lift.
+    const dir = _sunRight
+      .multiplyScalar(Math.cos(SUN_ELEVATION))
+      .addScaledVector(_sunUp, Math.sin(SUN_ELEVATION))
+      .normalize();
+    this.mesh.position.copy(dir).multiplyScalar(SUN_RADIUS);
+    this.mesh.quaternion.copy(camera.quaternion);
+    this.mat.uniforms.uTime.value = this.time;
+    this.mat.uniforms.uOpacity.value = this.opacity;
+  }
+}
+
+// ---------------------------------------------------------------- destination planets
 /** The reachable worlds sit far enough away to read as celestial bodies while
  * still being close enough for a short, continuous flight. */
 const DESTINATION_DISTANCE = 245;

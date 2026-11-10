@@ -16,7 +16,7 @@ import {
   offsetDir
 } from './planet';
 import { GLOBE_ATMOSPHERE, NIGHT, ZONE_ATMOSPHERE, type Atmosphere, type ZoneAtmosphereId } from './night';
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { SkyEnvironment } from './look';
 import { LightPool, emitter, type Emitter } from './lights';
 import { buildWorldProps, type Dynamic } from './props';
 import { Critter, Hearts } from './critters';
@@ -24,7 +24,7 @@ import { Clouds } from './clouds';
 import { Skyline } from './skyline';
 import { buildRobotDeer } from './wildlife';
 import { Aurora, SkyAurora } from './aurora';
-import { Constellations, Meteors, Moon } from './sky';
+import { Constellations, Meteors, Moon, Sun } from './sky';
 import { patchSurface, type SurfaceFx } from './surfaceFx';
 import { ColliderGrid, nearBridge } from './collision';
 import { WONDERS, wonderAction, wonderDir, type Wonder } from './wonders';
@@ -218,6 +218,10 @@ export class Game {
   private constellations: Constellations;
   private meteors: Meteors;
   private moon: Moon;
+  /** The oversized pale sun of the sky three-piece set; scenery, not the key light. */
+  private sun: Sun;
+  /** Pre-filtered sky environment, rebuilt once per zone change. */
+  private env: SkyEnvironment;
   /** Point lights lent to whichever light sources are nearest the player. */
   private lights = new LightPool(8);
   private glowMat: THREE.MeshBasicMaterial | null = null;
@@ -334,13 +338,13 @@ export class Game {
     this.renderer.toneMappingExposure = 1.15;
     this.scene.background = new THREE.Color(this.profile.sky);
 
-    // No environment map means every metal surface has nothing to reflect and
-    // renders black. A neutral studio room, prefiltered once, gives the paint
-    // and chrome something to pick up without washing the world out.
-    const pmrem = new THREE.PMREMGenerator(this.renderer);
-    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    this.scene.environmentIntensity = 0.5;
-    pmrem.dispose();
+    // Metals need a sky to reflect. `look.ts` paints the zone's own sky into an
+    // equirectangular canvas and pre-filters it once; the map is replaced when
+    // the atmosphere changes, never per frame.
+    this.env = new SkyEnvironment(this.renderer);
+    this.env.request('river', performance.now(), true);
+    this.scene.environment = this.env.texture;
+    this.scene.environmentIntensity = 1;
 
     this.fog = new THREE.FogExp2(0x9fd8ea, 0);
     this.scene.fog = this.fog;
@@ -366,8 +370,9 @@ export class Game {
     this.constellations = new Constellations(seed);
     this.meteors = new Meteors(seed);
     this.moon = new Moon(seed);
+    this.sun = new Sun(seed);
     this.scene.add(this.ground, this.water, this.stars, this.constellations.group, this.meteors.group);
-    this.scene.add(this.moon.group);
+    this.scene.add(this.moon.group, this.sun.group);
 
     const props = buildWorldProps(seed);
     if (props.solid) this.scene.add(props.solid);
@@ -618,6 +623,7 @@ export class Game {
       }
     });
     this.renderer.dispose();
+    this.env.dispose();
   }
 
   // ---------------------------------------------------------------- loop
@@ -1231,6 +1237,7 @@ export class Game {
     this.moonLight.position.copy(focus).addScaledVector(moonDir, 140);
     this.moonLight.target.updateMatrixWorld();
     this.moon.update(this.camera);
+    this.sun.update(dt, this.camera);
   }
 
   // ---------------------------------------------------------------- world
@@ -1348,6 +1355,13 @@ export class Game {
     (this.stars.material as THREE.PointsMaterial).opacity = now.stars;
     this.constellations.setOpacity(now.stars);
     this.meteors.setOpacity(now.stars);
+
+    // The reflected sky follows the atmosphere. `request` is a no-op until the
+    // zone actually changes, and the bake itself is throttled inside.
+    const clock = performance.now();
+    this.env.request(this.globe ? 'globe' : this.zoneAtmo, clock);
+    this.env.update(clock);
+    this.scene.environment = this.env.texture;
 
     // Lava, embers, and crystals burn brighter against a dark sky.
     if (this.glowMat) this.glowMat.color.setScalar(1.1 + 0.5 * (1 - now.stars));

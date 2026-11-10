@@ -13,6 +13,7 @@ import {
 } from './biomes';
 import { configureRoadSource, ROAD_EASE, roadHit, roadSurfaceMesh } from './roads';
 import { deriveSeed, fbm3, seededRng } from './noise';
+import { withCircuitEtch } from './look';
 import type { PlanetProfile } from './space';
 
 export const PLANET_RADIUS = 42;
@@ -385,13 +386,19 @@ export function buildGround(): THREE.Mesh {
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geo.computeVertexNormals();
 
-  const mat = new THREE.MeshStandardMaterial({
-    vertexColors: true,
-    // The scene now carries an environment map, so the metal can stay low and
-    // still pick up a little sheen without washing the colours out.
-    roughness: 0.55,
-    metalness: 0.15
-  });
+  // Machined metal, not painted ground. High metalness with a low roughness
+  // turns the flat plains into the mirror-wet sheet the reference asks for:
+  // what the player sees is mostly the sky environment, tinted by the zone's
+  // own vertex colours. The circuit etch is the faint seam pattern on top.
+  const mat = withCircuitEtch(
+    new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.42,
+      metalness: 0.82,
+      envMapIntensity: 1.05
+    }),
+    { strength: 0.055, scale: 0.9, color: 0x63d8f0 }
+  );
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
   mesh.name = 'ground';
@@ -399,7 +406,16 @@ export function buildGround(): THREE.Mesh {
   // casts shadows, and a surface a few centimetres up would throw a ragged
   // shadow along its own edges.
   const road = roadSurfaceMesh();
-  if (road) mesh.add(road);
+  if (road) {
+    // The paving is the same metal family as the plain it cuts through, just a
+    // touch rougher, so it catches the horizon band without reading as glass.
+    const roadMat = road.material as THREE.MeshStandardMaterial;
+    roadMat.roughness = 0.44;
+    roadMat.metalness = 0.7;
+    roadMat.envMapIntensity = 0.9;
+    roadMat.needsUpdate = true;
+    mesh.add(road);
+  }
   return mesh;
 }
 
