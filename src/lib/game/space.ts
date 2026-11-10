@@ -1,29 +1,9 @@
-// Shared, Three.js-free state and generation for travel between planets.
+// Shared, Three.js-free generation of planet identities from a seed label.
 
 import { seededRng } from './noise';
 import { hashSeed } from './seed';
 
-const SHIP_KEY = 'planet_ship';
-
 export const EARTH_SEED = 'earth';
-
-/** Parts are identified by their stable index in this list. */
-export const SHIP_PARTS = [
-  'Hull Plating',
-  'Cockpit Canopy',
-  'Port Wing',
-  'Starboard Wing',
-  'Thruster Core'
-] as const;
-
-export const MAX_FUEL = 100;
-export const SHARD_FUEL = 10;
-
-export type ShipProgress = {
-  parts: number[];
-  crafted: boolean;
-  fuel: number;
-};
 
 export type SpaceDestination = {
   seed: string;
@@ -53,18 +33,6 @@ export type PlanetProfile = {
   /** Multipliers over Earth's terrain amplitudes. */
   relief: number;
   ruggedness: number;
-};
-
-export type SpaceStatus = {
-  parts: number;
-  totalParts: number;
-  crafted: boolean;
-  fuel: number;
-  maxFuel: number;
-  planetName: string;
-  planetKind: string;
-  depth: number;
-  isEarth: boolean;
 };
 
 type AlienArchetype = Exclude<PlanetArchetype, 'earth'>;
@@ -197,16 +165,6 @@ const NAME_LAST = [
   'Hollow', 'Maw', 'Reach', 'Remnant', 'Rift', 'Shroud', 'Spindle', 'Veil'
 ] as const;
 
-const SEED_ADJECTIVES = [
-  'ashen', 'auroral', 'benthic', 'broken', 'echoing', 'glass', 'hollow', 'luminous',
-  'orbital', 'riven', 'silent', 'tidal', 'umbra', 'verdant', 'violet', 'wandering'
-] as const;
-
-const SEED_NOUNS = [
-  'calyx', 'comet', 'coral', 'ember', 'halo', 'islet', 'lantern', 'maw',
-  'monolith', 'prism', 'reef', 'rift', 'signal', 'spore', 'vault', 'whorl'
-] as const;
-
 const earthProfile: PlanetProfile = {
   seed: EARTH_SEED,
   name: 'Earth',
@@ -226,42 +184,6 @@ const earthProfile: PlanetProfile = {
 
 const pick = <T>(values: readonly T[], rng: () => number): T => values[Math.floor(rng() * values.length)]!;
 const between = (range: readonly [number, number], rng: () => number): number => range[0] + (range[1] - range[0]) * rng();
-
-function validShipProgress(value: unknown): ShipProgress {
-  const record = value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : {};
-  const parts = Array.isArray(record.parts)
-    ? [...new Set(record.parts.filter((part): part is number => Number.isInteger(part) && part >= 0 && part < SHIP_PARTS.length))].sort(
-        (a, b) => a - b
-      )
-    : [];
-  const allPartsFound = parts.length === SHIP_PARTS.length;
-  const rawFuel = typeof record.fuel === 'number' && Number.isFinite(record.fuel) ? record.fuel : 0;
-
-  return {
-    parts,
-    crafted: record.crafted === true && allPartsFound,
-    fuel: Math.floor(Math.min(MAX_FUEL, Math.max(0, rawFuel)))
-  };
-}
-
-/** Read and validate global ship progress. Invalid or unavailable storage is treated as a fresh ship. */
-export function loadShipProgress(): ShipProgress {
-  try {
-    const raw = localStorage.getItem(SHIP_KEY);
-    return raw ? validShipProgress(JSON.parse(raw)) : validShipProgress(null);
-  } catch {
-    return validShipProgress(null);
-  }
-}
-
-/** Persist a validated snapshot; private browsing and storage quotas are harmless. */
-export function saveShipProgress(progress: ShipProgress): void {
-  try {
-    localStorage.setItem(SHIP_KEY, JSON.stringify(validShipProgress(progress)));
-  } catch {
-    /* storage unavailable */
-  }
-}
 
 /** Stable visual and display parameters for a planet seed. */
 export function planetProfile(seed: string): PlanetProfile {
@@ -285,27 +207,4 @@ export function planetProfile(seed: string): PlanetProfile {
     relief: between(archetype.relief, rng),
     ruggedness: between(archetype.ruggedness, rng)
   };
-}
-
-/** Three reproducible onward routes. Including depth in the hash keeps the graph endless. */
-export function spaceDestinations(seed: string, depth: number): SpaceDestination[] {
-  const nextDepth = depth + 1;
-  const destinations: SpaceDestination[] = [];
-
-  for (let i = 0; i < 3; i++) {
-    const routeHash = hashSeed(`space-route:${seed}:${nextDepth}:${i}`);
-    const rng = seededRng(routeHash);
-    const label = `${pick(SEED_ADJECTIVES, rng)}-${pick(SEED_NOUNS, rng)}-${routeHash.toString(36).padStart(7, '0')}-${i + 1}`;
-    const profile = planetProfile(label);
-    destinations.push({
-      seed: label,
-      name: profile.name,
-      kind: profile.kind,
-      depth: nextDepth,
-      fuelCost: 20 + Math.floor(rng() * 21),
-      color: profile.water
-    });
-  }
-
-  return destinations;
 }

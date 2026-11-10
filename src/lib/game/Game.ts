@@ -6,7 +6,6 @@ import { setNoiseSeed } from './noise';
 import { hashSeed } from './seed';
 import {
   PLANET_RADIUS,
-  SEA_LEVEL,
   surfaceNormal,
   buildGround,
   buildStars,
@@ -14,33 +13,18 @@ import {
   configurePlanet,
   tangentBasis,
   walkRadius,
-  offsetDir,
-  surfaceFrame
+  offsetDir
 } from './planet';
 import { GLOBE_ATMOSPHERE, NIGHT, ZONE_ATMOSPHERE, type Atmosphere, type ZoneAtmosphereId } from './night';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { LightPool, emitter, type Emitter } from './lights';
 import { buildWorldProps, type Dynamic } from './props';
-import {
-  buildAlienCritter,
-  buildBear,
-  buildCrab,
-  buildDeer,
-  buildDuck,
-  buildFox,
-  buildFrog,
-  buildGoat,
-  buildPenguin,
-  buildRabbit,
-  buildSheep,
-  buildTurtle
-} from './character';
 import { Critter, Hearts } from './critters';
 import { Clouds } from './clouds';
 import { Skyline } from './skyline';
 import { buildRobotDeer } from './wildlife';
 import { Aurora, SkyAurora } from './aurora';
-import { Constellations, Meteors, Moon, Planets, type PlanetTarget } from './sky';
+import { Constellations, Meteors, Moon } from './sky';
 import { patchSurface, type SurfaceFx } from './surfaceFx';
 import { ColliderGrid, nearBridge } from './collision';
 import { WONDERS, wonderAction, wonderDir, type Wonder } from './wonders';
@@ -68,21 +52,7 @@ import {
   type Milestone,
   type MilestoneId
 } from './journal';
-import { ShipParts, buildSpaceship } from './spaceship';
-import {
-  EARTH_SEED,
-  MAX_FUEL,
-  SHARD_FUEL,
-  SHIP_PARTS,
-  loadShipProgress,
-  planetProfile,
-  saveShipProgress,
-  spaceDestinations,
-  type PlanetProfile,
-  type ShipProgress,
-  type SpaceDestination,
-  type SpaceStatus
-} from './space';
+import { EARTH_SEED, planetProfile, type PlanetProfile } from './space';
 
 /** Interaction card. `kicker` overrides the wonder wording, for example for the boat. */
 export type Prompt = { id: string; action: string; found: boolean; kicker?: string };
@@ -113,14 +83,6 @@ export type GameCallbacks = {
   onMilestone: (m: Milestone) => void;
   /** The player asked for the journal. */
   onJournalOpen: () => void;
-  /** Ship inventory or fuel changed. */
-  onSpace: (status: SpaceStatus) => void;
-  /** The player entered or left direct-control spaceflight. */
-  onFlight: (flying: boolean) => void;
-  /** The ship physically reached one of the destination planets. */
-  onArrive: (destination: SpaceDestination) => void;
-  /** A ship part, crafting, or refuelling event needs a toast. */
-  onSpaceNotice: (notice: { kicker: string; text: string }) => void;
 };
 
 // Tank-style driving: forward/back along the machine's own heading, left/right
@@ -163,24 +125,9 @@ const JOURNAL_FLUSH = 4;
 const CAM_MIN = 5;
 const CAM_MAX = 28;
 const GLOBE_MARGIN = 10;
-/** Spaceflight is always moving; Shift/touch-run raises the cruise speed. */
-const FLIGHT_SPEED = 34;
-const FLIGHT_BOOST = 56;
-const FLIGHT_TURN = 1.35;
-/** Distance above a destination surface at which the landing computer takes over. */
-const LANDING_APPROACH = 16;
-const LANDING_DURATION = 2.4;
 
-/** Ship parts and critter species are stored under English keys; show Chinese. */
-const PART_LABEL: Record<string, string> = {
-  'Hull Plating': '船壳装甲',
-  'Cockpit Canopy': '驾驶舱罩',
-  'Port Wing': '左翼',
-  'Starboard Wing': '右翼',
-  'Thruster Core': '推进核心'
-};
+/** Critter species are stored under English keys; show Chinese. */
 const CRITTER_LABEL: Record<string, string> = { 'robot deer': '机械鹿' };
-const partLabel = (part: string): string => PART_LABEL[part] ?? part;
 const critterLabel = (name: string): string => CRITTER_LABEL[name] ?? name;
 
 const _e = new THREE.Euler();
@@ -241,7 +188,6 @@ export class Game {
   readonly profile: PlanetProfile;
   /** Number of outward jumps made from Earth. */
   readonly depth: number;
-  private shipProgress: ShipProgress;
 
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
@@ -272,7 +218,6 @@ export class Game {
   private constellations: Constellations;
   private meteors: Meteors;
   private moon: Moon;
-  private planets: Planets;
   /** Point lights lent to whichever light sources are nearest the player. */
   private lights = new LightPool(8);
   private glowMat: THREE.MeshBasicMaterial | null = null;
@@ -312,26 +257,6 @@ export class Game {
   /** Seconds before the camera starts swinging back behind the heading. */
   private orbitHold = 0;
   private colliders: ColliderGrid;
-
-  // Starship: salvage is scattered on Earth; the completed ship can be flown
-  // to any generated destination and set down on its visible terrain.
-  private parts: ShipParts | null = null;
-  private ship: THREE.Group;
-  private shipDir = new THREE.Vector3();
-  private readonly destinations: SpaceDestination[];
-  private flying = false;
-  private arriving = false;
-  private flightForward = new THREE.Vector3();
-  private flightUp = new THREE.Vector3();
-  private flightSpeed = 0;
-  private flightWarning = 0;
-  private landingTarget: PlanetTarget | null = null;
-  private landingElapsed = 0;
-  private landingStart = new THREE.Vector3();
-  private landingEnd = new THREE.Vector3();
-  private landingUp = new THREE.Vector3();
-  private landingStartRotation = new THREE.Quaternion();
-  private landingEndRotation = new THREE.Quaternion();
 
   // Camera: a tangent "forward" carried along with the player, pitch, distance.
   private camForward = new THREE.Vector3();
@@ -391,8 +316,6 @@ export class Game {
     this.depth = this.seed === EARTH_SEED ? 0 : Math.max(1, Math.floor(options.depth ?? 1));
     this.found = loadFound(this.seed);
     this.profile = planetProfile(this.seed);
-    this.shipProgress = loadShipProgress();
-    this.destinations = spaceDestinations(this.seed, this.depth);
     if (!this.journal.planets.includes(this.seed)) {
       this.journal.planets = [...this.journal.planets, this.seed];
       this.journalDirty = true;
@@ -456,26 +379,6 @@ export class Game {
     for (const e of props.lights) this.lights.add(e);
     this.colliders = new ColliderGrid(props.colliders);
     const fire = wonderDir(WONDERS[0]);
-    this.shipDir.copy(fire);
-    offsetDir(this.shipDir, 1.1, -1.8);
-    for (let i = 0; i < 10 && isOcean(this.shipDir); i++) offsetDir(this.shipDir, -0.11, 0.18);
-    this.ship = buildSpaceship(this.shipProgress.crafted);
-    surfaceFrame(this.shipDir, -0.35, _m, 0.08).decompose(this.ship.position, this.ship.quaternion, this.ship.scale);
-    this.ship.visible = false;
-    this.scene.add(this.ship);
-    this.planets = new Planets(seed, this.destinations, this.shipDir);
-    this.planets.group.visible = false;
-    this.scene.add(this.planets.group);
-    if (false as boolean) {
-      this.parts = new ShipParts(
-        seed,
-        this.colliders,
-        this.lights,
-        this.shipProgress.parts,
-        [this.shipDir, ...WONDERS.map((wonder) => wonderDir(wonder))]
-      );
-      this.scene.add(this.parts.group);
-    }
     this.shards = new Shards(seed, this.colliders, this.lights, loadShards(this.seed));
     this.scene.add(this.shards.group, this.fireworks.group);
     this.fireworks.onBurst = () => this.audio.pop();
@@ -611,7 +514,6 @@ export class Game {
     this.input = new Input(canvas);
     this.input.onFirstGesture(() => this.exitIntro());
     window.addEventListener('pagehide', this.handlePageHide);
-    this.callbacks.onSpace(this.spaceStatus);
     this.applyAtmosphere(0, true);
 
     this.resize();
@@ -666,84 +568,6 @@ export class Game {
     return { found: this.shards.foundCount, total: this.shards.total };
   }
 
-  /** Current ship objective, fuel, and planet identity for the HUD. */
-  get spaceStatus(): SpaceStatus {
-    const home = this.seed === EARTH_SEED;
-    return {
-      parts: this.parts?.foundCount ?? this.shipProgress.parts.length,
-      totalParts: SHIP_PARTS.length,
-      crafted: this.shipProgress.crafted,
-      fuel: this.shipProgress.fuel,
-      maxFuel: MAX_FUEL,
-      planetName: home ? '机械星球' : this.profile.name,
-      planetKind: home ? '星球' : this.profile.kind,
-      depth: this.depth,
-      isEarth: home
-    };
-  }
-
-  /** Fully recharge the grounded ship at Earth's landing pad. */
-  refuelShip(): void {
-    if (!this.shipProgress.crafted || this.flying || this.seed !== EARTH_SEED || this.shipProgress.fuel >= MAX_FUEL) return;
-    const added = MAX_FUEL - this.shipProgress.fuel;
-    this.audio.start();
-    this.exitIntro();
-    this.shipProgress = { ...this.shipProgress, fuel: MAX_FUEL };
-    saveShipProgress(this.shipProgress);
-    this.audio.sparkle();
-    this.callbacks.onSpace(this.spaceStatus);
-    this.callbacks.onSpaceNotice({
-      kicker: '停机坪补给',
-      text: `燃料已补满 · +${added} 燃料`
-    });
-    this.promptId = null;
-  }
-
-  /** Board the completed ship and hand its movement to the player. */
-  launchFlight(): void {
-    if (!this.shipProgress.crafted || this.flying) return;
-    const target = this.planets.targets.find(({ destination }) => destination.fuelCost <= this.shipProgress.fuel);
-    if (!target) {
-      this.callbacks.onSpaceNotice({
-        kicker: '飞船电脑',
-        text: '收集能量晶块，或返回机械星球把燃料补满'
-      });
-      return;
-    }
-    this.audio.start();
-    this.exitIntro();
-    if (this.globe) this.setGlobe(false);
-    this.setOverlayOpen(false);
-    this.flying = true;
-    this.arriving = false;
-    this.flightWarning = 0;
-    this.landingTarget = null;
-    this.landingElapsed = 0;
-    this.player.setVisible(false);
-    this.ship.position.copy(this.shipDir).multiplyScalar(walkRadius(this.shipDir) + 2.5);
-    this.flightForward.copy(target.position).sub(this.ship.position).normalize();
-    this.flightUp.copy(this.shipDir).addScaledVector(this.flightForward, -this.shipDir.dot(this.flightForward));
-    if (this.flightUp.lengthSq() < 1e-6) tangentBasis(this.flightForward, 0, _v1, this.flightUp);
-    this.flightUp.normalize();
-    this.flightSpeed = 10;
-    this.transition = 1.4;
-    this.placeFlightShip();
-    this.callbacks.onPrompt(null);
-    this.callbacks.onFlight(true);
-  }
-
-  /** Abort a flight and put the ship back on its landing pad. */
-  landFlight(): void {
-    if (!this.flying || this.arriving) return;
-    this.flying = false;
-    this.flightSpeed = 0;
-    this.player.setVisible(true);
-    surfaceFrame(this.shipDir, -0.35, _m, 0.08).decompose(this.ship.position, this.ship.quaternion, this.ship.scale);
-    this.transition = 1.2;
-    this.callbacks.onFlight(false);
-    this.callbacks.onSpaceNotice({ kicker: '飞船电脑', text: '已返回停机坪' });
-  }
-
   toggleMute(): boolean {
     this.audio.start();
     return this.audio.toggle();
@@ -786,7 +610,6 @@ export class Game {
     this.input.dispose();
     this.audio.dispose();
     this.burst.dispose();
-    this.planets.dispose();
     this.scene.traverse((o) => {
       if (o instanceof THREE.Mesh) {
         o.geometry.dispose();
@@ -912,11 +735,7 @@ export class Game {
 
   private handleInput(dt: number): void {
     const input = this.input;
-    if (input.consumeEscape()) {
-      if (this.overlayOpen) this.callbacks.onEscape();
-      else if (this.flying) this.landFlight();
-      else this.callbacks.onEscape();
-    }
+    if (input.consumeEscape()) this.callbacks.onEscape();
     if (input.consumeHelp()) this.callbacks.onHelp();
     if (input.consumePhoto() && !this.overlayOpen) this.togglePhoto();
     if (input.consumeJournal()) this.callbacks.onJournalOpen();
@@ -930,15 +749,6 @@ export class Game {
     const transform = input.consumeTransform();
     this.dragThisFrame = orbit.dx !== 0 || orbit.dy !== 0;
     if (this.dragThisFrame) this.orbitHold = 1.2;
-
-    if (this.flying) {
-      if (!this.overlayOpen && hop) {
-        this.landFlight();
-        return;
-      }
-      if (!this.overlayOpen) this.steerFlight(-orbit.dx * 0.0035, -orbit.dy * 0.0035);
-      return;
-    }
 
     if (globe && !this.overlayOpen) this.toggleGlobe();
     if (this.globe) {
@@ -958,7 +768,7 @@ export class Game {
     }
 
     // Clicking a machine takes it over; a click on the ground does nothing.
-    if (click && !this.overlayOpen && !this.globe && !this.flying) this.pickCrew(click);
+    if (click && !this.overlayOpen && !this.globe) this.pickCrew(click);
     if (input.takeHoverChange()) this.updatePickCursor();
 
     if (transform && !this.overlayOpen) {
@@ -987,10 +797,8 @@ export class Game {
 
     if (interact && !this.overlayOpen && !this.globe) {
       const gem = this.nearestGem();
-      const byShip = !gem && this.ship.visible && this.shipDir.angleTo(this.dir) * PLANET_RADIUS < INTERACT_RANGE + 0.8;
-      const pal = gem || byShip ? null : this.nearestCritter();
+      const pal = gem ? null : this.nearestCritter();
       if (gem) this.findWonder(gem);
-      else if (byShip) this.useShip();
       else if (pal) this.petCritter(pal);
     }
 
@@ -1001,13 +809,8 @@ export class Game {
   // ---------------------------------------------------------------- player
 
   private updatePlayer(dt: number): void {
-    if (this.flying) {
-      this.updateFlight(dt);
-      return;
-    }
-
     this.updateDrive(dt);
-    if (!this.flying && !this.globe && this.pushOutOfActors(this.dir)) {
+    if (!this.globe && this.pushOutOfActors(this.dir)) {
       // Being shoved off a walker or an animal kills the momentum.
       this.moveSpeed *= 0.5;
       // Being shoved must not shove us into a wall: settle the body again.
@@ -1048,10 +851,7 @@ export class Game {
     if (this.player.footStrike && !this.airborne) this.audio.step(speed01 > 0.75);
     this.placePlayer(dt);
     this.updateBiome(dt);
-    if (Math.abs(this.moveSpeed) > 0.2) {
-      this.pickUpShard();
-      this.pickUpPart();
-    }
+    if (Math.abs(this.moveSpeed) > 0.2) this.pickUpShard();
   }
 
   /**
@@ -1158,40 +958,11 @@ export class Game {
     this.journal.shards += 1;
     this.journalDirty = true;
     this.callbacks.onShards(this.shards.foundCount, this.shards.total);
-    if (this.shipProgress.crafted && this.shipProgress.fuel < MAX_FUEL) {
-      const before = this.shipProgress.fuel;
-      this.shipProgress = { ...this.shipProgress, fuel: Math.min(MAX_FUEL, before + SHARD_FUEL) };
-      saveShipProgress(this.shipProgress);
-      this.callbacks.onSpace(this.spaceStatus);
-      this.callbacks.onSpaceNotice({
-        kicker: '飞船燃料',
-        text: `晶块已精炼 · +${this.shipProgress.fuel - before} 燃料`
-      });
-    }
     if (this.shards.foundCount >= this.shards.total) {
       this.fireworks.celebrate(this.player.root.position, 4.5);
       this.award('starfall');
     }
     this.flushJournal(true);
-  }
-
-  /** Collect one of Earth's five scattered ship parts. */
-  private pickUpPart(): void {
-    if (!this.parts || this.shipProgress.crafted) return;
-    const idx = this.parts.collect(this.dir);
-    if (idx < 0) return;
-    this.shipProgress = { ...this.shipProgress, parts: this.parts.foundIndices };
-    saveShipProgress(this.shipProgress);
-    this.audio.sparkle();
-    this.callbacks.onSpace(this.spaceStatus);
-    const complete = this.shipProgress.parts.length >= SHIP_PARTS.length;
-    this.callbacks.onSpaceNotice({
-      kicker: complete ? '飞船就绪' : '找回一个部件',
-      text: complete
-        ? `${partLabel(SHIP_PARTS[idx])}已归位 · 回停机坪组装`
-        : `${partLabel(SHIP_PARTS[idx])} · ${this.shipProgress.parts.length}/${SHIP_PARTS.length}`
-    });
-    this.promptId = null;
   }
 
   /** Biome caption and shore scan, on a quarter-second cadence. */
@@ -1380,7 +1151,7 @@ export class Game {
   /** A hand cursor while the pointer is over a machine that can be taken over. */
   private updatePickCursor(): void {
     const hover = this.input.hoverPointer;
-    if (!hover || this.overlayOpen || this.globe || this.flying) {
+    if (!hover || this.overlayOpen || this.globe) {
       this.canvas.style.cursor = '';
       return;
     }
@@ -1398,11 +1169,7 @@ export class Game {
     const desiredLook = _v2;
     const desiredUp = _v3;
 
-    if (this.flying) {
-      desiredPos.copy(this.ship.position).addScaledVector(this.flightForward, -10).addScaledVector(this.flightUp, 4.2);
-      desiredLook.copy(this.ship.position).addScaledVector(this.flightForward, 15);
-      desiredUp.copy(this.flightUp);
-    } else if (this.globe) {
+    if (this.globe) {
       if (!this.dragThisFrame) this.globeYaw += dt * 0.05;
       desiredPos.copy(this.globeDirection()).multiplyScalar(this.globeDistance());
       desiredLook.set(0, 0, 0);
@@ -1458,7 +1225,7 @@ export class Game {
     const back = _v3.setFromMatrixColumn(this.camera.matrixWorld, 2);
     const lift = 0.3 + this.atmoNow.keyHeight * 0.65;
     const moonDir = right.multiplyScalar(-1.15).addScaledVector(camUp, lift).addScaledVector(back, 0.6).normalize();
-    const focus = this.flying ? _v4.copy(this.ship.position) : this.globe ? _v4.set(0, 0, 0) : _v4.copy(this.player.root.position);
+    const focus = this.globe ? _v4.set(0, 0, 0) : _v4.copy(this.player.root.position);
     this.snapShadowFocus(focus, moonDir);
     this.moonLight.target.position.copy(focus);
     this.moonLight.position.copy(focus).addScaledVector(moonDir, 140);
@@ -1471,8 +1238,7 @@ export class Game {
   private updateWorld(dt: number): void {
     const t = this.time;
     this.applyAtmosphere(dt);
-    this.crowd.update(dt, t, this.globe || this.flying ? null : this.dir, this.dir);
-    this.planets.update(dt, t);
+    this.crowd.update(dt, t, this.globe ? null : this.dir, this.dir);
 
     // Swell on the energy channels.
     (this.water.userData.uniforms as { uTime: { value: number } }).uTime.value = t;
@@ -1482,23 +1248,22 @@ export class Game {
     this.hearts.update(dt, this.camera.quaternion);
     this.clouds.update(dt);
     this.skyline.update(dt, t);
-    this.weather.setHidden(this.globe || this.flying);
+    this.weather.setHidden(this.globe);
     this.weather.update(dt, t, this.dir);
     // Rain darkens the ground it falls on and snow settles on whatever faces the sky.
     this.fx.setCenter(this.player.root.position);
     this.fx.setWet(this.weather.rainLevel);
     this.fx.setSnow(this.weather.snowLevel);
     this.aurora.update(dt, t);
-    this.skyAurora.setHidden(this.globe || this.flying);
+    this.skyAurora.setHidden(this.globe);
     this.skyAurora.update(dt, t);
     this.constellations.update(t);
     this.meteors.update(dt);
     this.shards.update(dt, t);
-    this.parts?.update(dt, t);
     this.fireworks.update(dt);
     // A streak counts as seen if it crosses the sky while the player is on the ground.
     if (this.meteors.group.visible) {
-      if (!this.meteorSeen && !this.globe && !this.flying && !this.intro) {
+      if (!this.meteorSeen && !this.globe && !this.intro) {
         this.meteorSeen = true;
         this.award('stargazer');
       }
@@ -1532,7 +1297,7 @@ export class Game {
     for (const crew of this.crews) crew.rig.hit.castShadow = false;
 
     // Hand the pooled lights to whichever sources are nearest the active machine.
-    this.lights.update(t, this.flying ? this.ship.position : this.player.root.position);
+    this.lights.update(t, this.player.root.position);
   }
 
   // ---------------------------------------------------------------- atmosphere
@@ -1626,170 +1391,6 @@ export class Game {
     this.callbacks.onJournal(this.journal);
   }
 
-  // ---------------------------------------------------------------- starship
-  /** Apply one yaw/pitch step while preserving an orthonormal flight frame. */
-  private steerFlight(yaw: number, pitch: number): void {
-    if (yaw !== 0) {
-      _q.setFromAxisAngle(this.flightUp, yaw);
-      this.flightForward.applyQuaternion(_q).normalize();
-    }
-    _v1.crossVectors(this.flightUp, this.flightForward).normalize();
-    if (pitch !== 0) {
-      _q.setFromAxisAngle(_v1, -pitch);
-      this.flightForward.applyQuaternion(_q).normalize();
-      this.flightUp.applyQuaternion(_q).normalize();
-    }
-    _v1.crossVectors(this.flightUp, this.flightForward).normalize();
-    this.flightUp.crossVectors(this.flightForward, _v1).normalize();
-  }
-
-  private placeFlightShip(): void {
-    _v1.crossVectors(this.flightUp, this.flightForward).normalize();
-    _m.makeBasis(_v1, this.flightUp, this.flightForward);
-    this.ship.quaternion.setFromRotationMatrix(_m);
-  }
-
-  /** Commit fuel and prepare a controlled descent onto visible terrain. */
-  private beginPlanetLanding(target: PlanetTarget): void {
-    this.shipProgress = { ...this.shipProgress, fuel: this.shipProgress.fuel - target.destination.fuelCost };
-    saveShipProgress(this.shipProgress);
-    this.callbacks.onSpace(this.spaceStatus);
-    this.arriving = true;
-    this.flightSpeed = 0;
-    this.landingTarget = target;
-    this.landingElapsed = 0;
-    this.landingStart.copy(this.ship.position);
-    this.landingStartRotation.copy(this.ship.quaternion);
-    this.landingUp.copy(this.ship.position).sub(target.position).normalize();
-    this.landingEnd.copy(target.position).addScaledVector(this.landingUp, target.surfaceRadius(this.landingUp) + 0.08);
-
-    _v2.copy(this.flightUp).addScaledVector(this.landingUp, -this.flightUp.dot(this.landingUp));
-    if (_v2.lengthSq() < 1e-6) tangentBasis(this.landingUp, 0, _v1, _v2);
-    else _v2.normalize();
-    _v1.crossVectors(this.landingUp, _v2).normalize();
-    _m.makeBasis(_v1, this.landingUp, _v2);
-    this.landingEndRotation.setFromRotationMatrix(_m);
-    this.planets.beginLanding(target);
-    this.callbacks.onSpaceNotice({
-      kicker: '准备降落',
-      text: `正在降落：${target.destination.name}`
-    });
-  }
-
-  /** Ease the hull from forward flight into a feet-down touchdown. */
-  private updatePlanetLanding(dt: number): void {
-    const target = this.landingTarget;
-    if (!target) return;
-    this.landingElapsed += dt;
-    const progress = Math.min(1, this.landingElapsed / LANDING_DURATION);
-    const eased = progress * progress * (3 - 2 * progress);
-    this.ship.position.lerpVectors(this.landingStart, this.landingEnd, eased);
-    this.ship.position.addScaledVector(this.landingUp, Math.sin(progress * Math.PI) * 1.6);
-    this.ship.quaternion.slerpQuaternions(this.landingStartRotation, this.landingEndRotation, eased);
-    this.flightUp.set(0, 1, 0).applyQuaternion(this.ship.quaternion).normalize();
-    this.flightForward.set(0, 0, 1).applyQuaternion(this.ship.quaternion).normalize();
-    if (progress < 1) return;
-
-    const destination = target.destination;
-    this.landingTarget = null;
-    this.callbacks.onFlight(false);
-    queueMicrotask(() => {
-      if (!this.disposed) this.callbacks.onArrive(destination);
-    });
-  }
-
-  /** Advance direct-control flight and hand a close approach to the landing computer. */
-  private updateFlight(dt: number): void {
-    if (this.arriving) {
-      this.updatePlanetLanding(dt);
-      return;
-    }
-    const steering = !this.overlayOpen;
-    if (steering) this.steerFlight(this.input.moveX * FLIGHT_TURN * dt, this.input.moveY * FLIGHT_TURN * dt);
-    const cruise = steering ? (this.input.run ? FLIGHT_BOOST : FLIGHT_SPEED) : 0;
-    this.flightSpeed += (cruise - this.flightSpeed) * Math.min(1, dt * 2.8);
-    this.ship.position.addScaledVector(this.flightForward, this.flightSpeed * dt);
-    this.placeFlightShip();
-    this.flightWarning = Math.max(0, this.flightWarning - dt);
-
-    const distanceFromOriginSq = this.ship.position.lengthSq();
-    if (distanceFromOriginSq < (PLANET_RADIUS + 2) ** 2 || distanceFromOriginSq > 520 ** 2) {
-      this.landFlight();
-      return;
-    }
-
-    for (const target of this.planets.targets) {
-      const approachRadius = target.radius + LANDING_APPROACH;
-      if (this.ship.position.distanceToSquared(target.position) > approachRadius * approachRadius) continue;
-      if (target.destination.fuelCost > this.shipProgress.fuel) {
-        if (this.flightWarning === 0) {
-          this.callbacks.onSpaceNotice({
-            kicker: '航线未解锁',
-            text: `${target.destination.name} 需要 ${target.destination.fuelCost} 点燃料`
-          });
-          this.flightWarning = 2.5;
-        }
-        _v2.copy(this.ship.position).sub(target.position).normalize();
-        this.ship.position.copy(target.position).addScaledVector(_v2, approachRadius + 2);
-        this.flightForward.reflect(_v2).normalize();
-        this.flightUp.addScaledVector(this.flightForward, -this.flightUp.dot(this.flightForward)).normalize();
-        this.placeFlightShip();
-        return;
-      }
-
-      this.beginPlanetLanding(target);
-      return;
-    }
-  }
-
-
-
-  private useShip(): void {
-    this.audio.start();
-    this.exitIntro();
-    if (!this.shipProgress.crafted) {
-      const missing = SHIP_PARTS.length - this.shipProgress.parts.length;
-      if (missing > 0) {
-        this.callbacks.onSpaceNotice({
-          kicker: '坠毁的飞船',
-          text: `还差 ${missing} 个部件才能组装`
-        });
-        return;
-      }
-      this.shipProgress = { ...this.shipProgress, crafted: true, fuel: MAX_FUEL };
-      saveShipProgress(this.shipProgress);
-      this.replaceShip(true);
-      this.fireworks.celebrate(this.ship.position, 6);
-      this.audio.sparkle();
-      this.callbacks.onSpace(this.spaceStatus);
-      this.callbacks.onSpaceNotice({
-        kicker: '飞船组装完成',
-        text: '引擎已启动 · 登船飞向太空'
-      });
-      this.promptId = null;
-      return;
-    }
-    if (this.seed === EARTH_SEED && this.shipProgress.fuel < MAX_FUEL) {
-      this.refuelShip();
-      return;
-    }
-    this.launchFlight();
-  }
-
-  private replaceShip(crafted: boolean): void {
-    const old = this.ship;
-    this.scene.remove(old);
-    old.traverse((object) => {
-      if (!(object instanceof THREE.Mesh)) return;
-      object.geometry.dispose();
-      const materials = Array.isArray(object.material) ? object.material : [object.material];
-      for (const material of materials) material.dispose();
-    });
-    this.ship = buildSpaceship(crafted);
-    surfaceFrame(this.shipDir, -0.35, _m, 0.08).decompose(this.ship.position, this.ship.quaternion, this.ship.scale);
-    this.scene.add(this.ship);
-  }
-
   // ---------------------------------------------------------------- wonders
 
   private nearestGem(): Gem | null {
@@ -1847,11 +1448,9 @@ export class Game {
   }
 
   private updatePrompt(): void {
-    const idle = this.globe || this.flying || this.overlayOpen || this.photo;
+    const idle = this.globe || this.overlayOpen || this.photo;
     const gem = idle ? null : this.nearestGem();
-    const byShip =
-      !idle && !gem && this.ship.visible && this.shipDir.angleTo(this.dir) * PLANET_RADIUS < INTERACT_RANGE + 0.8;
-    const pal = idle || gem || byShip ? null : this.nearestCritter();
+    const pal = idle || gem ? null : this.nearestCritter();
     let prompt: Prompt | null = null;
     if (gem) {
       prompt = {
@@ -1859,16 +1458,6 @@ export class Game {
         action: wonderAction(gem.wonder),
         found: this.found.includes(gem.wonder.id)
       };
-    }
-    else if (byShip) {
-      const missing = SHIP_PARTS.length - this.shipProgress.parts.length;
-      prompt = this.shipProgress.crafted
-        ? this.seed === EARTH_SEED && this.shipProgress.fuel < MAX_FUEL
-          ? { id: 'ship-refuel', action: '补充飞船燃料', found: false, kicker: `${this.shipProgress.fuel}/${MAX_FUEL} 燃料 · 停机坪可充满` }
-          : { id: 'ship-board', action: '登上飞船', found: false, kicker: `${this.shipProgress.fuel}/${MAX_FUEL} 燃料 · 飞往其他星球` }
-        : missing === 0
-          ? { id: 'ship-craft', action: '组装飞船', found: false, kicker: '五个部件都已回收' }
-          : { id: `ship-parts-${missing}`, action: `还差 ${missing} 个飞船部件`, found: false, kicker: '坠毁的飞船' };
     } else if (pal) {
       const animal = critterLabel(pal.name);
       prompt = {

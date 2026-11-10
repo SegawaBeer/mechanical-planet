@@ -5,7 +5,7 @@
   import { gameState, initialState } from '$lib/game/store';
   import { WONDERS } from '$lib/game/wonders';
   import { normalizeSeedLabel } from '$lib/game/seed';
-  import { EARTH_SEED, type SpaceDestination } from '$lib/game/space';
+  import { EARTH_SEED } from '$lib/game/space';
   import type { Game, GameCallbacks } from '$lib/game/Game';
   import Hud from '$lib/game/ui/Hud.svelte';
   import WonderPanel from '$lib/game/ui/WonderPanel.svelte';
@@ -56,19 +56,7 @@
         if ($gameState.openWonder || m.id === 'wonders') pendingToast = toast;
         else showToast(toast);
       },
-      onJournalOpen: () => toggleJournal(),
-      onSpace: (space) => gameState.update((s) => ({ ...s, space })),
-      onFlight: (flying) => {
-        gameState.update((s) => ({
-          ...s,
-          flying,
-          openWonder: null,
-          help: false,
-          journalOpen: false
-        }));
-      },
-      onArrive: (destination) => moveToPlanet(destination, true),
-      onSpaceNotice: (notice) => showToast(notice)
+      onJournalOpen: () => toggleJournal()
     };
   }
 
@@ -114,8 +102,7 @@
         found: nextGame.found,
         muted: nextGame.audio.muted,
         journal: nextGame.journal,
-        shards: nextGame.shardProgress,
-        space: nextGame.spaceStatus
+        shards: nextGame.shardProgress
       }));
       if (dev) (window as unknown as Record<string, unknown>).__game = nextGame;
     } catch (err) {
@@ -146,7 +133,6 @@
 
   function handlePopState(): void {
     if (!GameConstructor) return;
-    gameState.update((s) => ({ ...s, flying: false }));
     const current = locationPlanet();
     createPlanet(current.seed, current.depth, null);
   }
@@ -220,24 +206,10 @@
     game.startAudio();
     game.input.queueInteract();
   }
-
-  function moveToPlanet(destination: SpaceDestination, flown: boolean): void {
-    if (destroyed) return;
-    createPlanet(destination.seed, destination.depth, 'push');
-    showToast({
-      kicker: flown ? `抵达 · 深度 ${destination.depth}` : '紧急召回',
-      text: flown ? `${destination.name} · ${destination.kind}` : '已安全传送回机械星球'
-    });
-  }
-
-  function returnToEarth(): void {
-    if ($gameState.space.isEarth) return;
-    moveToPlanet({ seed: EARTH_SEED, name: '机械星球', kind: '星球', depth: 0, fuelCost: 0, color: 0x256a8c }, false);
-  }
 </script>
 
 <svelte:head>
-  <title>{$gameState.space.isEarth ? name : `${name} · ${$gameState.space.planetName}`}</title>
+  <title>{name}</title>
   <meta
     name="description"
     content="一颗被轨道矿车环绕的机械星球，四个区域，四座信标，一辆能变形的机器人。"
@@ -246,7 +218,7 @@
 
 <div class="game-root">
   {#if !$gameState.webglFailed}
-    <canvas bind:this={canvas} class="game-canvas" class:grab={$gameState.ready && !$gameState.flying} class:flight={$gameState.flying}></canvas>
+    <canvas bind:this={canvas} class="game-canvas" class:grab={$gameState.ready}></canvas>
 
     {#if !$gameState.ready}
       <div class="loading" aria-live="polite">
@@ -255,12 +227,11 @@
       </div>
     {/if}
 
-    {#if $gameState.ready && !$gameState.photo && !$gameState.flying}
+    {#if $gameState.ready && !$gameState.photo}
       <Hud
         found={$gameState.found.length}
         total={$gameState.total}
         shards={$gameState.shards}
-        space={$gameState.space}
         biome={$gameState.biome}
         prompt={$gameState.prompt}
         muted={$gameState.muted}
@@ -274,22 +245,6 @@
         on:journal={toggleJournal}
         on:interact={interactFromHud}
       />
-    {/if}
-    {#if $gameState.ready && $gameState.flying && !$gameState.photo && !$gameState.help && !$gameState.journalOpen}
-      <div class="flight-hud" aria-live="polite">
-        <div class="flight-status">
-          <span>航行中</span>
-        </div>
-        <button class="land" on:click={() => game?.landFlight()}>返回 {$gameState.space.planetName}</button>
-        <div class="crosshair" aria-hidden="true"><span></span></div>
-        <p class="flight-hint">
-          {#if $gameState.isTouch}
-            用摇杆转向 · 火箭键加速 · 靠近标记的星球降落
-          {:else}
-            <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 转向 · <kbd>Shift</kbd> 加速 · <kbd>空格</kbd> 返回 · 靠近星球降落
-          {/if}
-        </p>
-      </div>
     {/if}
 
     {#if $gameState.ready && !$gameState.photo}
@@ -317,7 +272,6 @@
 
     {#if $gameState.ready && $gameState.isTouch && !$gameState.openWonder && !$gameState.help && !$gameState.journalOpen && !$gameState.photo}
       <TouchControls
-        flying={$gameState.flying}
         on:move={(e) => {
           if (!game) return;
           game.input.touchMove = e.detail;
@@ -340,7 +294,6 @@
         found={$gameState.found.length}
         total={$gameState.total}
         seed={$gameState.seed}
-        depth={$gameState.space.depth}
         on:close={closeOverlays}
       />
     {/if}
@@ -413,9 +366,6 @@
   }
   .game-canvas.grab:active {
     cursor: grabbing;
-  }
-  .game-canvas.flight {
-    cursor: crosshair;
   }
 
   .loading {
@@ -512,139 +462,6 @@
     }
   }
 
-  .flight-hud {
-    position: absolute;
-    inset: 0;
-    z-index: 18;
-    pointer-events: none;
-    color: #f2efe6;
-    text-shadow: 0 2px 12px rgba(5, 9, 20, 0.9);
-  }
-  .flight-status {
-    position: absolute;
-    top: 22px;
-    left: 24px;
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    padding: 10px 14px;
-    border: 1px solid rgba(126, 219, 209, 0.38);
-    border-radius: 12px;
-    background: rgba(6, 15, 24, 0.68);
-    backdrop-filter: blur(8px);
-  }
-  .flight-status span {
-    color: #7edbd1;
-    font-size: 0.6rem;
-    letter-spacing: 0.18em;
-    text-transform: uppercase;
-  }
-  .flight-status strong {
-    font-size: 0.82rem;
-    font-weight: 600;
-  }
-  .land {
-    position: absolute;
-    top: 22px;
-    right: 24px;
-    padding: 10px 14px;
-    border: 1px solid rgba(242, 239, 230, 0.3);
-    border-radius: 999px;
-    background: rgba(6, 15, 24, 0.68);
-    backdrop-filter: blur(8px);
-    color: #f2efe6;
-    font-size: 0.7rem;
-    letter-spacing: 0.06em;
-    pointer-events: auto;
-  }
-  .land:hover {
-    border-color: rgba(233, 196, 106, 0.75);
-    color: #e9c46a;
-  }
-  .crosshair {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    width: 34px;
-    height: 34px;
-    transform: translate(-50%, -50%);
-    border: 1px solid rgba(242, 239, 230, 0.62);
-    border-radius: 50%;
-    box-shadow: 0 0 14px rgba(126, 219, 209, 0.35);
-  }
-  .crosshair::before,
-  .crosshair::after,
-  .crosshair span::before,
-  .crosshair span::after {
-    position: absolute;
-    content: '';
-    background: rgba(242, 239, 230, 0.72);
-  }
-  .crosshair::before,
-  .crosshair::after {
-    top: 50%;
-    width: 9px;
-    height: 1px;
-  }
-  .crosshair::before {
-    right: 100%;
-  }
-  .crosshair::after {
-    left: 100%;
-  }
-  .crosshair span::before,
-  .crosshair span::after {
-    left: 50%;
-    width: 1px;
-    height: 9px;
-  }
-  .crosshair span::before {
-    bottom: 100%;
-  }
-  .crosshair span::after {
-    top: 100%;
-  }
-  .flight-hint {
-    position: absolute;
-    bottom: 24px;
-    left: 50%;
-    max-width: calc(100% - 32px);
-    margin: 0;
-    padding: 8px 13px;
-    transform: translateX(-50%);
-    border-radius: 999px;
-    background: rgba(6, 15, 24, 0.62);
-    color: rgba(242, 239, 230, 0.82);
-    font-size: 0.68rem;
-    letter-spacing: 0.04em;
-    text-align: center;
-    white-space: nowrap;
-  }
-  .flight-hint kbd {
-    display: inline-grid;
-    min-width: 18px;
-    height: 18px;
-    margin-inline: 1px;
-    place-items: center;
-    border: 1px solid rgba(242, 239, 230, 0.3);
-    border-radius: 4px;
-    background: rgba(242, 239, 230, 0.08);
-    font: 0.6rem var(--planet-sans);
-  }
-  @media (max-width: 640px) {
-    .flight-status {
-      top: 14px;
-      left: 14px;
-    }
-    .land {
-      top: 14px;
-      right: 14px;
-    }
-    .flight-hint {
-      bottom: 156px;
-      white-space: normal;
-    }
-  }
   .noscript {
     padding: 40px;
     font-family: var(--font-mono);

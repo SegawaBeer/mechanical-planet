@@ -200,18 +200,6 @@
     font-size: 0.69rem;
     line-height: 1.45;
   }
-  .fuel-note,
-  .earth-note {
-    margin: 5px 0 0;
-    color: rgba(242, 239, 230, 0.62);
-    font-size: 0.69rem;
-    line-height: 1.5;
-  }
-  .fuel-note strong,
-  .earth-note strong {
-    color: #e9c46a;
-    font-weight: 500;
-  }
   dl {
     margin: 0;
     display: grid;
@@ -320,15 +308,6 @@
   }
   .continue:hover {
     background: rgba(233, 196, 106, 0.22);
-  }
-  .text-link {
-    font-size: 0.72rem;
-    color: rgba(242, 239, 230, 0.55);
-    text-decoration: underline;
-    text-underline-offset: 3px;
-  }
-  .text-link:hover {
-    color: rgba(242, 239, 230, 0.9);
   }
   @keyframes pop {
     from {

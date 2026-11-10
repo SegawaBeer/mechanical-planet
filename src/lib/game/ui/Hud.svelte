@@ -1,23 +1,11 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import { MAX_FUEL, SHIP_PARTS, type SpaceStatus } from '../space';
   import type { BiomeCaption } from '../store';
 
   export let found = 0;
   export let total = 4;
   /** Energy crystals collected on this planet. */
   export let shards: { found: number; total: number } = { found: 0, total: 0 };
-  export let space: SpaceStatus = {
-    parts: 0,
-    totalParts: SHIP_PARTS.length,
-    crafted: false,
-    fuel: 0,
-    maxFuel: MAX_FUEL,
-    planetName: '机械星球',
-    planetKind: '星球',
-    depth: 0,
-    isEarth: true
-  };
   export let biome: BiomeCaption | null = null;
   export let prompt: { id: string; action: string; found: boolean; kicker?: string } | null = null;
   export let muted = false;
@@ -273,114 +261,6 @@
     color: #c9b3ff;
   }
 
-  /* Journey objective */
-  .mission {
-    position: absolute;
-    top: 64px;
-    left: 50%;
-    width: min(290px, calc(100% - 32px));
-    transform: translateX(-50%);
-    padding: 9px 13px 10px;
-    border: 1px solid var(--glass-border);
-    border-radius: 12px;
-    background: var(--glass);
-    backdrop-filter: blur(10px);
-  }
-  .mission.ship-ready {
-    border-color: rgba(233, 196, 106, 0.35);
-  }
-  .mission-place {
-    margin: 0 0 5px;
-    overflow: hidden;
-    color: #fbf8f0;
-    font-size: 0.62rem;
-    font-weight: 600;
-    letter-spacing: 0.12em;
-    text-overflow: ellipsis;
-    text-transform: uppercase;
-    white-space: nowrap;
-  }
-  .mission-place span {
-    color: rgba(242, 239, 230, 0.5);
-    font-weight: 400;
-  }
-  .mission-line,
-  .fuel-heading {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 12px;
-    font-size: 0.68rem;
-  }
-  .mission-line strong,
-  .fuel-heading strong {
-    color: rgba(242, 239, 230, 0.82);
-    font-weight: 500;
-  }
-  .mission-line span,
-  .fuel-heading span {
-    flex: none;
-    color: rgba(242, 239, 230, 0.55);
-  }
-  .mission-line.complete strong,
-  .fuel-heading strong {
-    color: #e9c46a;
-  }
-  .fuel-heading.low strong {
-    color: #ffab73;
-  }
-  .mission progress {
-    display: block;
-    width: 100%;
-    height: 4px;
-    margin-top: 7px;
-    overflow: hidden;
-    border: 0;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.09);
-    color: #e9c46a;
-  }
-  .mission progress::-webkit-progress-bar {
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.09);
-  }
-  .mission progress::-webkit-progress-value {
-    border-radius: 999px;
-    background: #e9c46a;
-  }
-  .mission progress::-moz-progress-bar {
-    border-radius: 999px;
-    background: #e9c46a;
-  }
-  .mission progress.low::-webkit-progress-value {
-    background: #ffab73;
-  }
-  .mission progress.low::-moz-progress-bar {
-    background: #ffab73;
-  }
-  .refuel {
-    width: 100%;
-    margin-top: 8px;
-    padding: 6px 10px;
-    border: 1px solid rgba(233, 196, 106, 0.55);
-    border-radius: 8px;
-    background: rgba(233, 196, 106, 0.12);
-    color: #f6df9b;
-    font: inherit;
-    font-size: 0.68rem;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-  }
-  .refuel:hover {
-    background: rgba(233, 196, 106, 0.2);
-    border-color: rgba(233, 196, 106, 0.8);
-  }
-  .fuel-help {
-    margin: 7px 0 0;
-    color: rgba(242, 239, 230, 0.66);
-    font-size: 0.64rem;
-    line-height: 1.35;
-  }
   /* Round buttons */
   .actions {
     position: absolute;
@@ -591,10 +471,6 @@
     .counter {
       top: 56px;
       padding: 6px 12px;
-    }
-    .mission {
-      top: 94px;
-      padding: 8px 11px 9px;
     }
     .actions {
       top: 12px;

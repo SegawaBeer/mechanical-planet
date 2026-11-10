@@ -1,7 +1,6 @@
 import { writable } from 'svelte/store';
 import type { Wonder } from './wonders';
 import { emptyJournal, type Journal } from './journal';
-import { MAX_FUEL, SHIP_PARTS, type SpaceStatus } from './space';
 
 export type BiomeCaption = { name: string; kind: string; index: string; tagline: string };
 
@@ -13,7 +12,7 @@ export type GameState = {
   intro: boolean;
   globeView: boolean;
   biome: BiomeCaption | null;
-  /** Nearby wonder, animal, boat, or starship the player can interact with. */
+  /** Nearby wonder or animal the player can interact with. */
   prompt: { id: string; action: string; found: boolean; kicker?: string } | null;
   found: string[];
   total: number;
@@ -31,10 +30,6 @@ export type GameState = {
   journal: Journal;
   /** Starlight shards collected on this planet. */
   shards: { found: number; total: number };
-  /** Current ship inventory and planet summary. */
-  space: SpaceStatus;
-  /** True while the player directly controls the ship between visible worlds. */
-  flying: boolean;
 };
 
 export const initialState: GameState = {
@@ -55,19 +50,7 @@ export const initialState: GameState = {
   seed: '',
   journalOpen: false,
   journal: emptyJournal(),
-  shards: { found: 0, total: 0 },
-  space: {
-    parts: 0,
-    totalParts: SHIP_PARTS.length,
-    crafted: false,
-    fuel: 0,
-    maxFuel: MAX_FUEL,
-    planetName: '机械星球',
-    planetKind: '星球',
-    depth: 0,
-    isEarth: true
-  },
-  flying: false
+  shards: { found: 0, total: 0 }
 };
 
 export const gameState = writable<GameState>({ ...initialState });
