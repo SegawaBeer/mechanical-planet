@@ -1,121 +1,107 @@
 import * as THREE from 'three';
-import { bridgeHeight, configureBiomeOcean, isOcean, landBiomeBlend, nearSeaRoute, oceanField, OCEAN, type Biome } from './biomes';
+import { bridgeHeight, configureBiomeOcean, isOcean, landBiomeBlend, oceanField, OCEAN, RIVERS, type Biome } from './biomes';
 import { deriveSeed, fbm3, seededRng } from './noise';
 import type { PlanetProfile } from './space';
 
 export const PLANET_RADIUS = 42;
-/** Radius of the translucent water sphere. */
+/** Radius of the water sheet: the rivers run in trenches below the open ground. */
 export const SEA_LEVEL = PLANET_RADIUS + 0.4;
 
 let terrainReliefScale = 1;
-let terrainRuggedScale = 1;
 let terrainDetailScale = 1;
-let terrainCreaseFrequency = 3.2;
 
 /** Apply a profile to all subsequently generated terrain and water. */
 export function configurePlanet(profile: PlanetProfile): void {
   const relief = THREE.MathUtils.clamp(profile.relief, 0.4, 1.6);
   const ruggedness = THREE.MathUtils.clamp(profile.ruggedness, 0.4, 1.6);
   terrainReliefScale = relief;
-  terrainRuggedScale = ruggedness;
   terrainDetailScale = THREE.MathUtils.lerp(1, ruggedness, 0.65);
-  terrainCreaseFrequency = 3.2 * (1 + (ruggedness - 1) * 0.25);
   configureBiomeOcean(profile);
 }
 
 /**
  * Distance from the planet centre to the ground along unit direction `d`.
  *
- * The world is plated metal. A broad swell and a fine roll give every zone
- * some lift; on top of that each zone shapes its own ground. Energy channels
- * cut steep-walled canyons, the citadel climbs in stepped tiers, the ark dock
- * flattens into a deck around the hull, and the fortress sits on a raised
- * plateau. Every layer stays gentle enough that props never hang in the air.
+ * The four continents share one base ground: a broad swell and a fine roll,
+ * shaped by each zone into its own landform. The river is a trench cut into
+ * the river zone: its bed drops below the water surface, and the bank climbs
+ * steeply back to the surrounding ground. Across a zone border the two zones'
+ * heights cross-fade over the same band their colours do, so the seam is a
+ * gentle rise or fall and never a wall.
  */
 export function surfaceRadius(d: THREE.Vector3): number {
   const f = oceanField(d);
-  const reliefScale = terrainReliefScale;
-  const detailScale = terrainDetailScale;
   if (f < 0) {
-    // Bed: drops away from the shore so the water reads as deep. `f` is the
-    // distance to the shore in surface units.
-    const depth = Math.min(1, -f * 0.6);
-    return PLANET_RADIUS - 0.35 - depth * 1.3;
+    // Bed: deepest under the middle of the channel, so the river reads as a cut.
+    const depth = Math.min(1, -f * 0.45);
+    return SEA_LEVEL - 0.32 - 2.1 * depth * depth;
   }
-  const rise = Math.min(1, f * 0.5);
-  const swell = fbm3(d.x * 1.9 - 7, d.y * 1.9 + 4, d.z * 1.9 + 9, 3) * 1.4 * reliefScale;
-  const roll = fbm3(d.x * 6 + 3, d.y * 6, d.z * 6 - 1, 3) * 0.18 * detailScale;
-  const base = 0.6 + swell + roll;
-  // Zone shapes cross-fade near a border so no cliff runs along it. The band is
-  // as wide as the colour blend, so the two zones meet without a visible seam.
   const blend = landBiomeBlend(d);
-  let h = zoneHeight(blend.primary, base, d);
   const margin = blend.margin * PLANET_RADIUS;
+  let h = zoneHeight(blend.primary, d, f);
   if (margin < ZONE_FADE) {
     const w = 0.5 * (1 - THREE.MathUtils.clamp(margin / ZONE_FADE, 0, 1));
-    h = THREE.MathUtils.lerp(h, zoneHeight(blend.secondary, base, d), w);
+    h = THREE.MathUtils.lerp(h, zoneHeight(blend.secondary, d, f), w);
   }
-  const shaped = h >= 0 ? h : Math.max(-0.2, h * 0.15);
-  const land = PLANET_RADIUS + 0.7 + rise * shaped + borderRelief(blend, margin, d);
-  // The coast: mostly beach, with a cliff on part of the sea shore.
-  const coast = fbm3(d.x * 5.5 + 17, d.y * 5.5 - 3, d.z * 5.5 + 9, 2);
-  const width = 3.1 + coast * 1.1;
-  // Cliffs belong to the land side of the coast; the island keeps its beaches so
-  // the bridge heads can land on sand.
-  const seaCoast = blend.primary.id !== 'river' && blend.secondary.id === 'river';
-  const cliff = seaCoast && fbm3(d.x * 2.9 - 21, d.y * 2.9 + 11, d.z * 2.9 - 6, 2) > 0.4 && !nearSeaRoute(d);
-  if (cliff) {
-    const lip = THREE.MathUtils.smoothstep(f, 0, 0.8 + Math.abs(coast) * 0.6);
-    return THREE.MathUtils.lerp(SEA_LEVEL - 0.2, land + 2.3, lip);
-  }
-  const beach = THREE.MathUtils.smoothstep(f, 0, width);
-  return THREE.MathUtils.lerp(SEA_LEVEL - 0.12, land, beach);
+  const bank = THREE.MathUtils.smoothstep(f, BANK_LIP, BANK_LIP + BANK_WIDTH);
+  return THREE.MathUtils.lerp(SEA_LEVEL - 0.3, PLANET_RADIUS + h, bank);
 }
 
-/** Sand at the waterline. */
+/** Sand on the banks of the river. */
 const SAND = new THREE.Color(0xe8d3a0);
-/** Scree between the fortress and the citadel. */
-const SCREE = new THREE.Color(0x6b5f52);
+
+/** How far, in surface units, the bank climbs from the waterline to open ground. */
+const BANK_WIDTH = 2.4;
+/** The bank reaches the waterline this far outside the sheet, so no water shows through it. */
+const BANK_LIP = 0.4;
+
+const _base = { swell: 0, roll: 0 };
+
+/** Broad ground swell and fine roll, shared by every zone, in planet units. */
+function groundBase(d: THREE.Vector3): { swell: number; roll: number } {
+  _base.swell = fbm3(d.x * 1.7 - 7, d.y * 1.7 + 4, d.z * 1.7 + 9, 3) * 0.75 * terrainReliefScale;
+  _base.roll = fbm3(d.x * 6.5 + 3, d.y * 6.5, d.z * 6.5 - 1, 3) * 0.12 * terrainDetailScale;
+  return _base;
+}
+
+const _tiltEast = new THREE.Vector3();
+const _tiltNorth = new THREE.Vector3();
 
 /**
- * Landforms along a zone border: a cliff between the citadel and the ark and
- * between the ark and the fortress, with ramps where the noise dips so the two
- * zones can still be crossed on foot; broken scree between the fortress and the
- * citadel.
+ * Landform of one zone, as an elevation above `PLANET_RADIUS` in planet units.
+ *
+ * The river country is mesas around a low floodplain; the citadel climbs four
+ * shallow terraces to a flat crown the city stands on; the ark is a flat dock
+ * plain tilted a little across its width; the fortress is a plateau with a
+ * lifted rim. Every slope here stays gentle enough to walk or drive.
  */
-function borderRelief(blend: { primary: Biome; secondary: Biome }, margin: number, d: THREE.Vector3): number {
-  if (margin > 8) return 0;
-  const a = blend.primary.id;
-  const b = blend.secondary.id;
-  const cliffPair = (a === 'citadel' || b === 'citadel') && (a === 'ark' || b === 'ark')
-    || (a === 'ark' || b === 'ark') && (a === 'fortress' || b === 'fortress');
-  if (cliffPair) {
-    // The citadel stands above the ark, the ark above the fortress.
-    const highId = a === 'citadel' || b === 'citadel' ? 'citadel' : 'ark';
-    const onHigh = blend.primary.id === highId;
-    // A jagged lip, and ramps where the noise dips so the cliff can be walked.
-    const jitter = fbm3(d.x * 20, d.y * 20, d.z * 20, 2) * 0.9;
-    const reach = THREE.MathUtils.smoothstep(margin + jitter, 1.0, 2.8);
-    const ramp = THREE.MathUtils.smoothstep(Math.abs(fbm3(d.x * 2.6 + 31, d.y * 2.6 - 7, d.z * 2.6 + 13, 2)), 0.12, 0.36);
-    return onHigh ? 2.3 * ramp * reach : 0;
-  }
-  if ((a === 'citadel' && b === 'fortress') || (a === 'fortress' && b === 'citadel')) {
-    return fbm3(d.x * 9, d.y * 9 + 5, d.z * 9 - 3, 2) * 0.45;
-  }
-  return 0;
-}
-
-/** How one zone shapes the basic swell-and-roll ground. */
-function zoneHeight(zone: Biome, h: number, d: THREE.Vector3): number {
-  const near = THREE.MathUtils.smoothstep(Math.acos(THREE.MathUtils.clamp(zone.center.dot(d), -1, 1)), 0.55, 0.2);
+function zoneHeight(zone: Biome, d: THREE.Vector3, f: number): number {
+  const base = groundBase(d);
+  const h = 1.15 + base.swell + base.roll;
+  const r = Math.acos(THREE.MathUtils.clamp(zone.center.dot(d), -1, 1)) * PLANET_RADIUS;
   if (zone.id === 'river') {
-    // Rounded mesas between the channels: the canyon country, kept gentle.
-    const crease = 1 - Math.abs(fbm3(d.x * terrainCreaseFrequency - 12, d.y * terrainCreaseFrequency + 6, d.z * terrainCreaseFrequency - 2, 3));
-    return h + crease * crease * 0.8 * terrainRuggedScale;
+    // Flat-topped mesas, held low near the water so the canyon floor is walkable.
+    const n = fbm3(d.x * 2.4 - 12, d.y * 2.4 + 6, d.z * 2.4 - 2, 3);
+    const mesa = THREE.MathUtils.smoothstep(n, 0.02, 0.45);
+    const plain = THREE.MathUtils.smoothstep(f, 1.5, 10);
+    return h + 0.35 - 0.65 * (1 - plain) + mesa * 1.35 * plain;
   }
-  if (zone.id === 'citadel') return h + 0.5 * near;
-  if (zone.id === 'ark') return THREE.MathUtils.lerp(h, 0.55, near * 0.85);
-  return h + 1.1 * near;
+  if (zone.id === 'citadel') {
+    // Four terraces, 0.45 units a step, rising to a level crown at the heart.
+    const k = THREE.MathUtils.clamp((18 - r) / 3.6, 0, 4);
+    const i = Math.floor(k);
+    const step = THREE.MathUtils.smoothstep(k - i, 0.55, 1);
+    return h + 0.3 + (i + step) * 0.45;
+  }
+  if (zone.id === 'ark') {
+    tangentBasis(zone.center, 0, _tiltEast, _tiltNorth);
+    const across = THREE.MathUtils.clamp(d.dot(_tiltEast) * PLANET_RADIUS, -30, 30);
+    return 2.1 + (base.swell + base.roll) * 0.3 + across * 0.022;
+  }
+  // fortress
+  const plate = 1 - THREE.MathUtils.smoothstep(r, 13, 17);
+  const rim = THREE.MathUtils.smoothstep(r, 13, 15.5) * (1 - THREE.MathUtils.smoothstep(r, 15.5, 19));
+  return h + 0.25 + plate * 1.4 + rim * 0.7;
 }
 
 const _na = new THREE.Vector3();
@@ -302,10 +288,10 @@ function zoneGround(b: Biome, d: THREE.Vector3, f: number, out: THREE.Color): TH
   if (f < 0.05) return out.setHex(b.beach);
   const palette = b.ground;
   const n = palette.length;
-  // Wide palettes (the ark's five colours) need a tighter noise so separate
-  // regions still show; blending them at a broad scale would average every hue
-  // into one muddy tone.
-  const freq = n > 3 ? 7 : 2.2;
+  // The ark's five-colour patchwork needs a tighter noise so separate patches
+  // still show; every other zone uses two or three closely related tones and a
+  // broad patch so the ground reads as one plate.
+  const freq = b.id === 'ark' ? 7 : 2.2;
   const t = THREE.MathUtils.clamp(fbm3(d.x * freq + 21, d.y * freq - 9, d.z * freq + 3, 2) * 0.5 + 0.5, 0, 1) * (n - 1);
   const i0 = Math.min(n - 1, Math.floor(t));
   const i1 = Math.min(n - 1, i0 + 1);
@@ -338,12 +324,9 @@ function groundColor(d: THREE.Vector3, out: THREE.Color): THREE.Color {
   } else {
     colour = zoneGround(blend.primary, d, f, out);
   }
-  // Broken scree along the fortress-citadel border: a mottled grey-brown.
-  const ids = `${blend.primary.id}-${blend.secondary.id}`;
-  if ((ids === 'citadel-fortress' || ids === 'fortress-citadel') && margin < 9 && f > 2) {
-    const mottle = fbm3(d.x * 7.5 + 13, d.y * 7.5 - 5, d.z * 7.5 + 3, 2) * 0.5 + 0.5;
-    colour.lerp(SCREE, (1 - margin / 9) * (0.35 + 0.5 * mottle));
-  }
+  // The shelf just under the waterline is shaded like the bed, so the sheet
+  // reads as lying in the cut rather than on top of the ground.
+  if (f < 1.6) colour.lerp(_pal.setHex(OCEAN.ground[0]), 1 - THREE.MathUtils.smoothstep(f, 0.2, 1.6));
   return colour;
 }
 
@@ -391,24 +374,104 @@ const ENERGY = {
 };
 
 /**
- * The energy channels. A sphere at sea level, but shaded as flowing light: two
- * crossed band fields sweep the surface, banks pull the colour toward white
- * hot, and grazing angles glow. Depth comes from `aShore`, baked at build time
- * because the channel bed lives in noise the GPU cannot sample.
+ * The energy river: a ribbon of light laid in the trench the channels cut, one
+ * strip per channel plus a disc for each pool. The sheet is shaded as flowing
+ * light: two crossed band fields sweep along it, the banks pull the colour
+ * toward white hot, and grazing angles glow. Depth comes from `aShore`, baked
+ * at build time because the channel bed lives in noise the GPU cannot sample.
  *
  * `uTime` is driven every frame by the Game through `mesh.userData.uniforms`.
  */
 export function buildWater(): THREE.Mesh {
-  const geo = new THREE.SphereGeometry(SEA_LEVEL, 128, 80);
-  const pos = geo.attributes.position as THREE.BufferAttribute;
-  const shore = new Float32Array(pos.count);
-  const d = new THREE.Vector3();
-  for (let i = 0; i < pos.count; i++) {
-    d.fromBufferAttribute(pos, i).normalize();
-    const depth = SEA_LEVEL - surfaceRadius(d);
-    shore[i] = 1 - THREE.MathUtils.clamp(depth / SHALLOW, 0, 1);
+  // The channels are laid out lazily; touching the field once makes sure the
+  // ribbons are built from the same river the terrain was shaped around.
+  oceanField(new THREE.Vector3(0, 1, 0));
+
+  const positions: number[] = [];
+  const shore: number[] = [];
+  const index: number[] = [];
+  const p = new THREE.Vector3();
+  const prev = new THREE.Vector3();
+  const next = new THREE.Vector3();
+  const tan = new THREE.Vector3();
+  const side = new THREE.Vector3();
+  const dirV = new THREE.Vector3();
+
+  /** One vertex of the sheet at `off` units sideways from the channel line. */
+  const vertex = (r: THREE.Vector3, sin: number, cos: number, off: number): void => {
+    const ang = off / PLANET_RADIUS;
+    dirV.copy(r).multiplyScalar(cos).addScaledVector(side, sin).normalize();
+    positions.push(dirV.x * SEA_LEVEL, dirV.y * SEA_LEVEL, dirV.z * SEA_LEVEL);
+    const depth = SEA_LEVEL - surfaceRadius(dirV);
+    shore.push(1 - THREE.MathUtils.clamp(depth / SHALLOW, 0, 1));
+  };
+
+  for (const river of RIVERS) {
+    const rows = river.points.length;
+    const start = positions.length / 3;
+    if (rows === 1) {
+      // A pool: a fan of triangles round one point, wide as its radius.
+      const centre = river.points[0];
+      const half = river.half[0];
+      const seg = 28;
+      const radial = new THREE.Vector3();
+      side.crossVectors(centre, new THREE.Vector3(0, 1, 0));
+      if (side.lengthSq() < 1e-6) side.set(1, 0, 0);
+      side.normalize();
+      radial.crossVectors(side, centre).normalize();
+      vertex(centre, 0, 1, 0);
+      for (let k = 0; k < seg; k++) {
+        const a = (k / seg) * Math.PI * 2;
+        const n = Math.sin(a);
+        const c = Math.cos(a);
+        const ang = half / PLANET_RADIUS;
+        dirV.copy(centre).multiplyScalar(Math.cos(ang))
+          .addScaledVector(side, Math.sin(ang) * c)
+          .addScaledVector(radial, Math.sin(ang) * n)
+          .normalize();
+        positions.push(dirV.x * SEA_LEVEL, dirV.y * SEA_LEVEL, dirV.z * SEA_LEVEL);
+        const depth = SEA_LEVEL - surfaceRadius(dirV);
+        shore.push(1 - THREE.MathUtils.clamp(depth / SHALLOW, 0, 1));
+      }
+      for (let k = 0; k < seg; k++) {
+        const a = start + 1 + k;
+        const b = start + 1 + ((k + 1) % seg);
+        index.push(start, b, a);
+      }
+      continue;
+    }
+    for (let i = 0; i < rows; i++) {
+      p.copy(river.points[i]);
+      prev.copy(river.points[Math.max(0, i - 1)]);
+      next.copy(river.points[Math.min(rows - 1, i + 1)]);
+      tan.subVectors(next, prev);
+      tan.addScaledVector(p, -tan.dot(p));
+      if (tan.lengthSq() < 1e-10) tan.crossVectors(p, new THREE.Vector3(0, 1, 0));
+      tan.normalize();
+      side.crossVectors(p, tan).normalize();
+      const half = river.half[i];
+      for (let j = -1; j <= 1; j++) {
+        const off = j * half;
+        const ang = Math.abs(off) / PLANET_RADIUS;
+        vertex(p, Math.sin(ang) * Math.sign(off), Math.cos(ang), off);
+      }
+    }
+    for (let i = 0; i < rows - 1; i++) {
+      for (let j = 0; j < 2; j++) {
+        const a = start + i * 3 + j;
+        const b = a + 1;
+        const c = a + 3;
+        const d = c + 1;
+        // (a, c, b) winds the outward way: +tangent cross +side is +up.
+        index.push(a, c, b, b, c, d);
+      }
+    }
   }
-  geo.setAttribute('aShore', new THREE.BufferAttribute(shore, 1));
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('aShore', new THREE.Float32BufferAttribute(shore, 1));
+  geo.setIndex(index);
 
   const uniforms = {
     uTime: { value: 0 },

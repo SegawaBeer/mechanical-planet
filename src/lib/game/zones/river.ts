@@ -1,78 +1,56 @@
-// Energy River zone (能量河流): a sea with an island in the middle, and three
-// bridges out to the land zones. Owned by the "terrain and energy river" session.
+// Energy River zone (能量河流): canyon country cut by a glowing river.
+// Owned by the "terrain and energy river" session.
 
 import * as THREE from 'three';
-import { BRIDGES, biomeById, type BridgeLine } from '../biomes';
+import { biomeById, RIVERS } from '../biomes';
 import { G, emit, footprint, part, rnd, type Ctx } from '../kit';
-import { PLANET_RADIUS, SEA_LEVEL, surfaceRadius, tangentBasis } from '../planet';
+import { PLANET_RADIUS, surfaceFrame, tangentBasis } from '../planet';
 import type { ZoneApi, ZoneModule } from './types';
 
 const METAL = [0x2b3741, 0x36434e, 0x46545f];
 const ENERGY = 0x2fe6ff;
 const ENERGY_HOT = 0x9ff5ff;
 
-const islandCentre = () => biomeById('river').center;
+/** The main channel of the river network. */
+const mainRiver = () => RIVERS[0];
 
-// --------------------------------------------------------------- bridges
-
-const _up = new THREE.Vector3();
-const _fwd = new THREE.Vector3();
-const _right = new THREE.Vector3();
-const _m = new THREE.Matrix4();
-const _q = new THREE.Quaternion();
-
-/** Mesh for one deck: plates, rails with a light strip, and piers to the bed. */
-function buildDeck(c: Ctx, deck: BridgeLine): void {
-  const width = 3.5;
-  const half = width / 2;
-  // The first and last samples are the registered overhang, so the model starts
-  // and ends one sample inside them and never stands outside the walkable deck.
-  for (let i = 1; i < deck.points.length - 2; i++) {
-    const a = deck.points[i];
-    const b = deck.points[i + 1];
-    const pa = a.clone().multiplyScalar(deck.heights[i]);
-    const pb = b.clone().multiplyScalar(deck.heights[i + 1]);
-    const mid = pa.clone().add(pb).multiplyScalar(0.5);
-    _up.copy(mid).normalize();
-    _fwd.copy(pb).sub(pa);
-    const segLen = _fwd.length() * 1.06;
-    _fwd.addScaledVector(_up, -_fwd.dot(_up)).normalize();
-    _right.crossVectors(_up, _fwd).normalize();
-    _m.makeBasis(_right, _up, _fwd);
-    _m.setPosition(mid);
-    const y = -0.24;
-    part(c.solid, G.box, METAL[2], _m, { p: [0, y, 0], s: [width, 0.24, segLen] });
-    part(c.solid, G.box, METAL[0], _m, { p: [half - 0.12, 0, 0], s: [0.14, 0.7, segLen] });
-    part(c.solid, G.box, METAL[0], _m, { p: [-half + 0.12, 0, 0], s: [0.14, 0.7, segLen] });
-    part(c.glow, G.box, ENERGY, _m, { p: [half - 0.12, 0.7, 0], s: [0.16, 0.1, segLen] });
-    part(c.glow, G.box, ENERGY, _m, { p: [-half + 0.12, 0.7, 0], s: [0.16, 0.1, segLen] });
-    // A pier every few segments, down to the bed.
-    if (i % 3 === 0) {
-      const bed = Math.min(surfaceRadius(a), deck.heights[i] - 0.3);
-      const h = Math.max(0.4, deck.heights[i] - 0.24 - bed + 1.2);
-      part(c.solid, G.cyl6, METAL[1], _m, { p: [0, -h, 0], s: [0.5, h, 0.5] });
-    }
-  }
+/**
+ * Direction `offset` units out from the river bank at fraction `u` along the
+ * main channel, on the side given by `sign`. Returns null before the channels
+ * have been laid out.
+ */
+function bankDir(u: number, offset: number, sign: number): THREE.Vector3 | null {
+  const line = mainRiver();
+  if (!line || line.points.length < 4) return null;
+  const last = line.points.length - 1;
+  const i = Math.round(THREE.MathUtils.clamp(u, 0, 1) * last);
+  const p = line.points[i];
+  const tan = new THREE.Vector3().subVectors(line.points[Math.min(last, i + 2)], line.points[Math.max(0, i - 2)]);
+  tan.addScaledVector(p, -tan.dot(p));
+  if (tan.lengthSq() < 1e-10) return null;
+  tan.normalize();
+  const side = new THREE.Vector3().crossVectors(p, tan).normalize().multiplyScalar(sign);
+  const off = (line.half[i] + offset) / PLANET_RADIUS;
+  return p.clone().multiplyScalar(Math.cos(off)).addScaledVector(side, Math.sin(off)).normalize();
 }
 
-/** Draw every deck the water layout published, and keep scatter off them. */
-function bridges(api: ZoneApi): void {
-  const c = api.ctx;
-  const centre = islandCentre();
+/** Local [east, north] of a direction, in the zone's own frame. */
+function localOf(d: THREE.Vector3): [number, number] {
+  const centre = biomeById('river').center;
   const right = new THREE.Vector3();
   const fwd = new THREE.Vector3();
   tangentBasis(centre, 0, right, fwd);
-  for (const deck of BRIDGES) {
-    buildDeck(c, deck);
-    for (let i = 0; i < deck.points.length; i += 3) {
-      const p = deck.points[i];
-      const flat = p.clone().addScaledVector(centre, -centre.dot(p));
-      if (flat.lengthSq() < 1e-10) continue;
-      flat.normalize();
-      const ang = centre.angleTo(p) * PLANET_RADIUS;
-      api.exclude(flat.dot(right) * ang, flat.dot(fwd) * ang, 3);
-    }
-  }
+  const flat = d.clone().addScaledVector(centre, -centre.dot(d));
+  const len = flat.length();
+  if (len < 1e-8) return [0, 0];
+  flat.divideScalar(len);
+  const ang = centre.angleTo(d) * PLANET_RADIUS;
+  return [flat.dot(right) * ang, flat.dot(fwd) * ang];
+}
+
+function excludeAt(api: ZoneApi, d: THREE.Vector3, radius: number): void {
+  const [east, north] = localOf(d);
+  api.exclude(east, north, radius);
 }
 
 // --------------------------------------------------------------- beacon
@@ -101,10 +79,11 @@ function beacon(api: ZoneApi): void {
 
 // --------------------------------------------------------------- fountains
 
-function fountain(api: ZoneApi, east: number, north: number, phase: number): void {
+/** A springhead on the river bank: a ring of stone with an energy jet. */
+function fountain(api: ZoneApi, d: THREE.Vector3, phase: number): void {
   const c = api.ctx;
-  const f = api.at(east, north, 0);
-  api.exclude(east, north, 3.4);
+  const f = surfaceFrame(d, 0, new THREE.Matrix4());
+  excludeAt(api, d, 3.4);
   const rocks = 13;
   for (let i = 0; i < rocks; i++) {
     const a = (i / rocks) * Math.PI * 2;
@@ -212,24 +191,59 @@ function pipeStub(c: Ctx, f: THREE.Matrix4): void {
   part(c.glow, G.cyl8, c.rng() < 0.5 ? ENERGY : ENERGY_HOT, f, { p: [0, h, 0], s: [0.3, 0.1, 0.3] });
 }
 
+/** A shelf of stacked plates on the canyon rim, for scale. */
+function rimStack(c: Ctx, f: THREE.Matrix4): void {
+  const s = rnd(c, 0.9, 1.6);
+  footprint(c, f, 0.8 * s);
+  let lift = 0;
+  const n = 2 + Math.floor(c.rng() * 3);
+  for (let i = 0; i < n; i++) {
+    const wide = s * (1.5 - i * 0.22);
+    part(c.solid, G.cyl6, METAL[i % 3], f, {
+      p: [rnd(c, -0.1, 0.1), lift, rnd(c, -0.1, 0.1)],
+      s: [wide * 2, s * 0.35, wide * 1.6],
+      r: [rnd(c, -0.05, 0.05), c.rng() * 3, rnd(c, -0.05, 0.05)]
+    });
+    lift += s * 0.34;
+  }
+}
+
 export const riverZone: ZoneModule = {
   id: 'river',
   build(api) {
-    bridges(api);
     beacon(api);
-    fountain(api, 6.4, 1.6, 0);
-    fountain(api, -5.4, 5.2, 1.6);
-    fountain(api, 1.2, -7.6, 3.1);
-    for (const [e, n, s] of [[7.4, -3.2, 1.6], [-7.2, -2.4, 1.3], [3.4, 7.4, 1.2]]) {
-      const f = api.at(e, n, 0);
-      api.exclude(e, n, 2.4);
+    // Springheads on three bends, so the water reads as the source of the zone.
+    const fountains: [number, number, number][] = [
+      [0.22, 4.4, 1],
+      [0.54, 5.2, -1],
+      [0.79, 3.8, 1]
+    ];
+    let phase = 0;
+    for (const [u, off, sign] of fountains) {
+      const d = bankDir(u, off, sign);
+      if (!d) continue;
+      fountain(api, d, phase);
+      phase += 1.7;
+    }
+    // Crystal clusters along the rim of the canyon.
+    const clusters: [number, number, number, number][] = [
+      [0.32, 2.6, -1, 1.5],
+      [0.66, 2.4, 1, 1.2],
+      [0.46, 16, 1, 1.0]
+    ];
+    for (const [u, off, sign, scale] of clusters) {
+      const d = bankDir(u, off, sign);
+      if (!d) continue;
+      const f = surfaceFrame(d, 0, new THREE.Matrix4());
+      excludeAt(api, d, 2.4);
       footprint(api.ctx, f, 0.9);
-      crystals(api.ctx, f, s);
+      crystals(api.ctx, f, scale);
     }
   },
   scatter: [
     { p: 0.05, build: plateRock },
     { p: 0.022, build: smallCrystals },
-    { p: 0.025, build: pipeStub }
+    { p: 0.025, build: pipeStub },
+    { p: 0.012, build: rimStack }
   ]
 };

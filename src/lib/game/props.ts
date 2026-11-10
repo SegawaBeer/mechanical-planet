@@ -100,7 +100,9 @@ export function buildWorldProps(seed: number): WorldProps {
     d.set(ctx.rng() * 2 - 1, ctx.rng() * 2 - 1, ctx.rng() * 2 - 1);
     if (d.lengthSq() < 0.05) continue;
     d.normalize();
-    if (oceanField(d) < 0.06) continue;
+    // Land only, and a unit or so clear of the river banks so nothing leans
+    // over the water or hangs off a canyon wall.
+    if (oceanField(d) < 1.5) continue;
     if (ctx.rng() > clumpAt(d)) continue;
     if (exclusions.some((ex) => d.angleTo(ex.dir) * PLANET_RADIUS < ex.radius)) continue;
     const table = ZONES[landBiomeAt(d).id as ZoneId].scatter;
