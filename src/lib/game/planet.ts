@@ -1,5 +1,17 @@
 import * as THREE from 'three';
-import { bridgeHeight, configureBiomeOcean, isOcean, landBiomeBlend, oceanField, OCEAN, RIVERS, type Biome } from './biomes';
+import {
+  BIOMES,
+  BRIDGES,
+  bridgeHeight,
+  configureBiomeOcean,
+  isOcean,
+  landBiomeBlend,
+  oceanField,
+  OCEAN,
+  RIVERS,
+  type Biome
+} from './biomes';
+import { configureRoadSource, ROAD_EASE, roadHit, roadSurfaceMesh } from './roads';
 import { deriveSeed, fbm3, seededRng } from './noise';
 import type { PlanetProfile } from './space';
 
@@ -28,8 +40,31 @@ export function configurePlanet(profile: PlanetProfile): void {
  * steeply back to the surrounding ground. Across a zone border the two zones'
  * heights cross-fade over the same band their colours do, so the seam is a
  * gentle rise or fall and never a wall.
+ *
+ * Where the road runs over land, the ground is levelled flat across the road
+ * band and eases back into the land over `ROAD_EASE` units each side, so the
+ * paved surface never cuts into a slope or floats above it. The bridge decks
+ * themselves are not part of the ground: over a channel the trench and the
+ * water sheet are left exactly as they were.
  */
 export function surfaceRadius(d: THREE.Vector3): number {
+  const base = rawSurfaceRadius(d);
+  const road = roadHit(d);
+  if (!road || road.deck) return base;
+  // Wider than the paved strip by more than one ground vertex (0.73 units),
+  // so every triangle that spans the road is entirely inside the flat band
+  // and cannot interpolate up through the surface.
+  const inner = road.half + 0.9;
+  const outer = inner + ROAD_EASE;
+  if (road.dist >= outer) return base;
+  let w = 1 - THREE.MathUtils.smoothstep(road.dist, inner, outer);
+  // Never raise the bed or the shoreline: the channel stays a channel.
+  w *= THREE.MathUtils.smoothstep(oceanField(d), 0, 0.9);
+  return w > 0 ? base + (road.height - base) * w : base;
+}
+
+/** Terrain before the road levels it; the road profile is sampled from this. */
+export function rawSurfaceRadius(d: THREE.Vector3): number {
   const f = oceanField(d);
   if (f < 0) {
     // Bed: deepest under the middle of the channel, so the river reads as a cut.
@@ -360,6 +395,11 @@ export function buildGround(): THREE.Mesh {
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
   mesh.name = 'ground';
+  // The paving rides with the ground rather than the props: the props mesh
+  // casts shadows, and a surface a few centimetres up would throw a ragged
+  // shadow along its own edges.
+  const road = roadSurfaceMesh();
+  if (road) mesh.add(road);
   return mesh;
 }
 
@@ -588,3 +628,14 @@ export function buildStars(seed: number): THREE.Points {
 }
 
 export { isOcean };
+
+// The road network samples the raw terrain, the water field and the zone
+// centres through this registration; `layoutBiomes` invalidates it whenever
+// the continents move, so a new seed gets a road fitted to its own planet.
+configureRoadSource({
+  centres: BIOMES.map((b) => b.center),
+  accents: BIOMES.map((b) => b.accent),
+  baseRadius: rawSurfaceRadius,
+  water: oceanField,
+  bridges: BRIDGES
+});

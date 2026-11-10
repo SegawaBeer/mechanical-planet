@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import { biomeById, landBiomeAt, oceanField } from './biomes';
 import { deriveSeed, fbm3, seededRng } from './noise';
 import { PLANET_RADIUS, offsetDir, surfaceFrame } from './planet';
+import { onRoad, roadBlocks, roadPieces } from './roads';
 import type { Collider } from './collision';
 import type { Emitter } from './lights';
 import { PropBatch, type Ctx } from './kit';
@@ -103,6 +104,8 @@ export function buildWorldProps(seed: number): WorldProps {
     // Land only, and a unit or so clear of the river banks so nothing leans
     // over the water or hangs off a canyon wall.
     if (oceanField(d) < 1.5) continue;
+    // Keep the carriageway, its margins and the ground under a bridge clear.
+    if (onRoad(d, 1.6)) continue;
     if (ctx.rng() > clumpAt(d)) continue;
     if (exclusions.some((ex) => d.angleTo(ex.dir) * PLANET_RADIUS < ex.radius)) continue;
     const table = ZONES[landBiomeAt(d).id as ZoneId].scatter;
@@ -117,6 +120,13 @@ export function buildWorldProps(seed: number): WorldProps {
     }
   }
 
+  // The carriageway, its edge lights and its bridge decks ride in the same
+  // merged meshes as the scenery, so the whole network costs a few draw calls.
+  const identity = new THREE.Matrix4();
+  for (const piece of roadPieces()) {
+    (piece.glow ? ctx.glow : ctx.solid).add(piece.geometry, piece.color, identity);
+  }
+
   const solid = ctx.solid.build(new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.55, metalness: 0.15 }));
   const glow = ctx.glow.build(new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false }));
   const night = ctx.night.build(new THREE.MeshBasicMaterial({ vertexColors: true }));
@@ -127,6 +137,11 @@ export function buildWorldProps(seed: number): WorldProps {
     keepFree.push({ dir: offsetDir(biomeById('river').center.clone(), 1.4, -3.6), radius: 1.5 });
     const started = performance.now();
     const added = autoCollide(solid.geometry, ctx.colliders, keepFree);
+    // A landmark or a hand-placed footprint may reach into the road band; its
+    // geometry stays where it is, but nothing may wall the carriageway off.
+    for (let i = ctx.colliders.length - 1; i >= 0; i--) {
+      if (roadBlocks(ctx.colliders[i].dir, ctx.colliders[i].radius)) ctx.colliders.splice(i, 1);
+    }
     console.log(
       `[autoCollide] added ${added} colliders, ${ctx.colliders.length} total (${Math.round(performance.now() - started)} ms)`
     );

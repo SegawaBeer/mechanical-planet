@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { biomeById, RIVERS } from '../biomes';
 import { G, emit, footprint, part, rnd, type Ctx } from '../kit';
 import { PLANET_RADIUS, surfaceFrame, tangentBasis } from '../planet';
+import { onRoad } from '../roads';
 import type { ZoneApi, ZoneModule } from './types';
 
 const METAL = [0x2b3741, 0x36434e, 0x46545f];
@@ -208,6 +209,15 @@ function rimStack(c: Ctx, f: THREE.Matrix4): void {
   }
 }
 
+/** Nearest bank spot to `u` that keeps `margin` clear of the ring road. */
+function clearSpot(u: number, off: number, sign: number, margin: number): THREE.Vector3 | null {
+  for (const shift of [0, 0.07, -0.07, 0.14, -0.14, 0.21, -0.21, 0.28, -0.28]) {
+    const d = bankDir(THREE.MathUtils.clamp(u + shift, 0.04, 0.96), off, sign);
+    if (d && !onRoad(d, margin)) return d;
+  }
+  return null;
+}
+
 export const riverZone: ZoneModule = {
   id: 'river',
   build(api) {
@@ -220,7 +230,7 @@ export const riverZone: ZoneModule = {
     ];
     let phase = 0;
     for (const [u, off, sign] of fountains) {
-      const d = bankDir(u, off, sign);
+      const d = clearSpot(u, off, sign, 6.2);
       if (!d) continue;
       fountain(api, d, phase);
       phase += 1.7;
@@ -232,7 +242,7 @@ export const riverZone: ZoneModule = {
       [0.46, 16, 1, 1.0]
     ];
     for (const [u, off, sign, scale] of clusters) {
-      const d = bankDir(u, off, sign);
+      const d = clearSpot(u, off, sign, 5.6);
       if (!d) continue;
       const f = surfaceFrame(d, 0, new THREE.Matrix4());
       excludeAt(api, d, 2.4);

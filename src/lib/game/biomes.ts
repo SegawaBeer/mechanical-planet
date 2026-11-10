@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { deriveSeed, fbm3, seededRng } from './noise';
+import { resetRoads, roadDeckHeight } from './roads';
 import type { PlanetProfile } from './space';
 
 export type BiomeId = 'river' | 'citadel' | 'ark' | 'fortress' | 'ocean';
@@ -152,6 +153,8 @@ export function layoutBiomes(seed: number): void {
   LAND_BIOMES.forEach((b, i) => b.center.copy(TETRA[order[i]]).applyQuaternion(turn).normalize());
   riverSeed = deriveSeed(seed, 9);
   resetWater();
+  // The road is fitted to the zone centres, so it moves with them.
+  resetRoads(seed);
 }
 
 function angleTo(b: Biome, d: THREE.Vector3): number {
@@ -466,20 +469,20 @@ export function nearSeaRoute(d: THREE.Vector3, pad = 11): boolean {
 export type BridgeLine = { points: THREE.Vector3[]; heights: number[]; halfWidth: number };
 
 /**
- * Decks across the water. Bridges belong to a later stage, so this is empty;
- * it stays exported so every module that reads it keeps compiling.
+ * Decks across the water. The road network fills this when it is laid out;
+ * every deck here is drawn geometry, so nothing a walker can stand on is
+ * invisible to the eye.
  */
 export const BRIDGES: BridgeLine[] = [];
 
-/** No decks exist yet, so no point of the ground is a bridge. */
+/** Height of the deck at `d`, or null where there is no bridge underfoot. */
 export function bridgeHeight(d: THREE.Vector3): number | null {
-  void d;
-  return null;
+  return roadDeckHeight(d);
 }
 
-/** True where `d` is water. Nothing in the water is walkable. */
+/** True where `d` is water and not covered by a bridge deck. */
 export function isOcean(d: THREE.Vector3): boolean {
-  return oceanField(d) < 0;
+  return oceanField(d) < 0 && roadDeckHeight(d) === null;
 }
 
 export function biomeAt(d: THREE.Vector3): Biome {
